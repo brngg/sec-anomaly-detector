@@ -17,10 +17,8 @@ CREATE TABLE IF NOT EXISTS filing_events (
     cik INTEGER NOT NULL,
     filing_type TEXT NOT NULL,
     filed_at TEXT NOT NULL,
-    filing_date TEXT,
+    filed_date TEXT NOT NULL,
     primary_document TEXT,
-    size_bytes INTEGER,
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
     FOREIGN KEY(cik) REFERENCES companies(cik) ON DELETE CASCADE
 );
 

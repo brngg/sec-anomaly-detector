@@ -51,14 +51,14 @@ def upsert_company(conn: sqlite3.Connection, cik: int, name: Optional[str] = Non
     )
 
 
-def insert_filing(conn: sqlite3.Connection, accession_id: str, cik: int, filing_type: str, filed_at: str, filing_date: Optional[str] = None, primary_document: Optional[str] = None, size_bytes: Optional[int] = None) -> None:
+def insert_filing(conn: sqlite3.Connection, accession_id: str, cik: int, filing_type: str, filed_at: str, filed_date: str, primary_document: Optional[str] = None) -> None:
     """Insert a filing if it does not already exist (dedupe on accession_id)."""
     conn.execute(
         """
-        INSERT OR IGNORE INTO filing_events (accession_id, cik, filing_type, filed_at, filing_date, primary_document, size_bytes)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT OR IGNORE INTO filing_events (accession_id, cik, filing_type, filed_at, filed_date, primary_document)
+        VALUES (?, ?, ?, ?, ?, ?)
         """,
-        (accession_id, cik, filing_type, filed_at, filing_date, primary_document, size_bytes),
+        (accession_id, cik, filing_type, filed_at, filed_date, primary_document),
     )
 
 

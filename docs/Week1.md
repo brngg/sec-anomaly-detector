@@ -59,9 +59,6 @@
 | **filing_type** | TEXT | e.g., 8-K, 10-Q, 10-K |
 | **filed_at** | TIMESTAMPTZ | Precise acceptance datetime |
 | **filing_date** | DATE | Coarse filing date |
-| **primary_document** | TEXT | Name of the main document |
-| **size_bytes** | BIGINT | File size for outlier detection |
-| **created_at** | TIMESTAMPTZ | Internal record insertion time |
 
 ### TABLE: Watermarks
 | Column | Type | Description |
