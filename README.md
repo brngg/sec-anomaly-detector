@@ -28,6 +28,39 @@ pip install -r requirements.txt
 python scripts/test_setup.py
 ```
 
+## Ingestion Config
+Backfill reads a company list from `data/companies.csv` by default (header: `ticker`).
+
+Environment variables:
+- `SEC_IDENTITY` — SEC identity string (recommended). If not set, a fallback identity is used with a warning.
+- `COMPANIES_CSV` — Optional path to a custom CSV file.
+- `DRY_RUN` — Set to `1` or `true` to skip DB writes while still fetching.
+
+To persist env vars locally, copy `.env.example` to `.env` and edit values.
+
+Example CSV:
+```csv
+ticker
+AAPL
+MSFT
+AMZN
+```
+
+Quick smoke test (no DB writes):
+```bash
+cat > /tmp/companies_smoke.csv <<'EOF'
+ticker
+AAPL
+MSFT
+AMZN
+EOF
+
+COMPANIES_CSV=/tmp/companies_smoke.csv \
+DRY_RUN=1 \
+SEC_IDENTITY="Your Name you@example.com" \
+python src/ingestion/backfill.py
+```
+
 ## Project Structure
 ```
 sec-anomaly-detector/

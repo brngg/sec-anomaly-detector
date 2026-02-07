@@ -6,8 +6,8 @@
 ---
 
 ## 🔧 Project status (high level)
-- Week‑1 completed: DB schema implemented, SQLite DB created, DB utilities added, FastAPI dependency wired, basic backfill pattern specified.
-- Next priorities: implement a tested backfill (3‑company smoke run), add unit tests, basic API endpoints, and detection algorithms.
+- Week‑1 completed: DB schema implemented, SQLite DB created, DB utilities added, FastAPI dependency wired, ingestion backfill implemented.
+- Next priorities: harden ingestion runs, add unit tests, basic API endpoints, and detection algorithms.
 
 ---
 
@@ -18,7 +18,7 @@
 - `src/`
   - `src/db/init_db.py` — creates DB schema
   - `src/db/db_utils.py` — connection helper + CRUD helpers
-  - `src/ingestion/backfill.py` — backfill stub (ingestion flow)
+  - `src/ingestion/backfill.py` — backfill implementation (CSV + env config)
   - `src/api/deps.py` — FastAPI `get_db` dependency
   - `src/detection/`, `src/analysis/`, `src/api/` — scaffolds for next steps
 - `docs/` — documentation (this file)
@@ -32,7 +32,7 @@ Tables:
 - `companies`
   - `cik` INTEGER PRIMARY KEY, `name`, `ticker`, `industry`, `updated_at` (ISO timestamp default)
 - `filing_events`
-  - `accession_id` TEXT PRIMARY KEY, `cik` FK → `companies(cik)`, `filing_type` NOT NULL, `filed_at` NOT NULL (ISO timestamp), `filing_date`, `primary_document`, `size_bytes`, `created_at`
+  - `accession_id` TEXT PRIMARY KEY, `cik` FK → `companies(cik)`, `filing_type` NOT NULL, `filed_at` NOT NULL (ISO timestamp), `filed_date` NOT NULL, `primary_document`
   - Indexes: `idx_filing_events_cik_type_filed_at`, `idx_filing_events_filed_at`
 - `watermarks`
   - `cik` PRIMARY KEY, `last_seen_filed_at`, `updated_at`, `last_run_at`, `last_run_status`, `last_error`
@@ -53,12 +53,13 @@ Timestamps are stored as ISO‑8601 `TEXT` (SQLite `datetime('now')` default) fo
 ---
 
 ## 🔁 Ingestion / Backfill (current)
-- `src/ingestion/backfill.py` contains a stub and recommended flow:
-  1. Upsert company metadata
-  2. Fetch filings for the past 6 months via `edgartools`
-  3. Insert filings (deduped on `accession_id`)
-  4. Update `watermarks`
-- Start with a 3‑company smoke test, with throttling, retries/backoff and `dry_run` support.
+- `src/ingestion/backfill.py` implements:
+  1. CSV‑driven ticker list (`data/companies.csv` by default)
+  2. `SEC_IDENTITY` env‑var configuration (fallback with warning)
+  3. Fetch filings for past 6 months via `edgartools`
+  4. Insert filings (deduped on `accession_id`)
+  5. Update `watermarks` per company
+- Supports throttling, retries/backoff, and `DRY_RUN=1`.
 
 ---
 
@@ -72,16 +73,8 @@ Timestamps are stored as ISO‑8601 `TEXT` (SQLite `datetime('now')` default) fo
 
 ---
 
-## 🧪 Tests & CI (recommended next steps)
-1. Unit tests for `get_conn()`, `upsert_company()`, `insert_filing()`, `update_watermark()` (use temp DB fixtures).
-2. Integration test: 3‑company backfill `dry_run` and small write test.
-3. Add GitHub Actions to run tests on PRs.
-
----
-
 ## 🚀 Next implementation priorities
-1. Implement `src/ingestion/backfill.py` using `edgartools` with `dry_run` and a 3‑company smoke run.
+1. Run and validate ingestion for a small company subset (smoke test) and verify watermarks.
 2. Add basic API endpoints (`/health`, `/companies`, `/companies/{cik}/filings`, `/filings/{accession}`).
 3. Implement detection algorithms in `src/detection/` (frequency spike, size outlier) and write alerts to `alerts` table.
 4. Add comprehensive tests and prepare a Postgres migration plan.
----

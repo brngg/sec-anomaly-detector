@@ -1,3 +1,4 @@
+import os
 import sqlite3
 from pathlib import Path
 
@@ -59,11 +60,11 @@ CREATE INDEX IF NOT EXISTS idx_alerts_status
     ON alerts (status);
 """
 
-def create_db(path: Path = DB_PATH) -> None:
+def create_db(path: Path = DB_PATH, reset: bool = False) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Remove existing DB file so we recreate cleanly (safe because tables are empty)
-    if path.exists():
+    # Only wipe the DB when explicitly requested
+    if reset and path.exists():
         path.unlink()
 
     conn = sqlite3.connect(path)
@@ -72,7 +73,9 @@ def create_db(path: Path = DB_PATH) -> None:
     conn.executescript(CREATE_SQL)
     conn.commit()
     conn.close()
-    print(f"Recreated DB at {path}")
+    action = "Recreated" if reset else "Ensured schema for"
+    print(f"{action} DB at {path}")
 
 if __name__ == "__main__":
-    create_db()
+    reset = os.getenv("RESET_DB", "").strip().lower() in {"1", "true", "yes"}
+    create_db(reset=reset)
