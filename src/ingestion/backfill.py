@@ -8,6 +8,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from edgar import Company, set_identity
+from dotenv import load_dotenv
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from src.db import db_utils
@@ -77,6 +78,7 @@ def fetch_filings(company: Company, date_filter: str):
 
 
 def main() -> int:
+    load_dotenv()
     sec_identity = os.getenv("SEC_IDENTITY", "").strip()
     if sec_identity:
         set_identity(sec_identity)

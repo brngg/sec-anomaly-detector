@@ -36,6 +36,8 @@ Environment variables:
 - `COMPANIES_CSV` — Optional path to a custom CSV file.
 - `DRY_RUN` — Set to `1` or `true` to skip DB writes while still fetching.
 
+To persist env vars locally, copy `.env.example` to `.env` and edit values.
+
 Example CSV:
 ```csv
 ticker
