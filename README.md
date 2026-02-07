@@ -28,6 +28,22 @@ pip install -r requirements.txt
 python scripts/test_setup.py
 ```
 
+## Ingestion Config
+Backfill reads a company list from `data/companies.csv` by default (header: `ticker`).
+
+Environment variables:
+- `SEC_IDENTITY` — SEC identity string (recommended). If not set, a fallback identity is used with a warning.
+- `COMPANIES_CSV` — Optional path to a custom CSV file.
+- `DRY_RUN` — Set to `1` or `true` to skip DB writes while still fetching.
+
+Example CSV:
+```csv
+ticker
+AAPL
+MSFT
+AMZN
+```
+
 ## Project Structure
 ```
 sec-anomaly-detector/
