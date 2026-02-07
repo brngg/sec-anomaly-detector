@@ -46,6 +46,21 @@ MSFT
 AMZN
 ```
 
+Quick smoke test (no DB writes):
+```bash
+cat > /tmp/companies_smoke.csv <<'EOF'
+ticker
+AAPL
+MSFT
+AMZN
+EOF
+
+COMPANIES_CSV=/tmp/companies_smoke.csv \
+DRY_RUN=1 \
+SEC_IDENTITY="Your Name you@example.com" \
+python src/ingestion/backfill.py
+```
+
 ## Project Structure
 ```
 sec-anomaly-detector/
