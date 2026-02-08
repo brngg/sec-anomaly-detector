@@ -33,7 +33,8 @@ build/
 .LSOverride
 
 # Project specific
-data/
+data/*
+!data/sec_anomaly.db
 logs/
 notebooks/.ipynb_checkpoints/
 

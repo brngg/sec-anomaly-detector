@@ -1,0 +1,46 @@
+name: SEC Poller
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: sec-poll
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  poll:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run poller
+        env:
+          SEC_IDENTITY: ${{ secrets.SEC_IDENTITY }}
+        run: python src/ingestion/poll.py
+
+      - name: Commit updated DB
+        run: |
+          if git diff --quiet -- data/sec_anomaly.db; then
+            echo "No DB changes"
+            exit 0
+          fi
+          git config user.name "sec-poller"
+          git config user.email "sec-poller@users.noreply.github.com"
+          git add data/sec_anomaly.db
+          git commit -m "Update SEC poll DB"
+          git push

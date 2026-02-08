@@ -61,6 +61,19 @@ SEC_IDENTITY="Your Name you@example.com" \
 python src/ingestion/backfill.py
 ```
 
+## Polling (cron)
+This repo includes a GitHub Actions workflow that runs a poller every 15 minutes and commits
+updates to `data/sec_anomaly.db` back to the repo.
+
+Setup:
+1. In GitHub, go to repo **Settings → Secrets and variables → Actions**.
+2. Add a secret named `SEC_IDENTITY` with your SEC identity string.
+
+Run locally (no DB writes):
+```bash
+DRY_RUN=1 SEC_IDENTITY="Your Name you@example.com" python src/ingestion/poll.py
+```
+
 ## Project Structure
 ```
 sec-anomaly-detector/
