@@ -51,7 +51,11 @@ def main() -> int:
             return 1
 
         current_filings = get_current_filings(
-            form=["8-K", "10-K", "10-Q", "8-K/A", "10-Q/A", "10-K/A"],
+            form=[
+                    "8-K", "10-K", "10-Q",           # Base forms
+                    "8-K/A", "10-Q/A", "10-K/A",     # Amendments
+                    "NT 10-K", "NT 10-Q"             # Non-timely notices
+                ],
             page_size=None,
         )
 
