@@ -1,27 +1,30 @@
 # SEC Filing Anomaly Detector — Codebase Summary (Snapshot)
 
-**Date:** 2026-02-04  
+**Date:** 2026-02-09  
 **Purpose:** Automated detection of suspicious filing patterns in SEC EDGAR data (late filings, 8‑K bursts, suspicious timing).
 
 ---
 
 ## 🔧 Project status (high level)
 - Week‑1 completed: DB schema implemented, SQLite DB created, DB utilities added, FastAPI dependency wired, ingestion backfill implemented.
-- Next priorities: harden ingestion runs, add unit tests, basic API endpoints, and detection algorithms.
+- Polling implemented: global “current filings” poller + GitHub Actions cron (every 15 minutes) that commits DB updates.
+- Next priorities: detection algorithms, basic API endpoints, and alerting logic.
 
 ---
 
 ## 📁 Repository layout (key files)
 - `README.md` — project overview & setup
 - `requirements.txt` — pinned deps (includes `edgartools`, `fastapi`)
-- `data/` — runtime DB: `sec_anomaly.db`
+- `data/` — runtime DB: `sec_anomaly.db` (tracked in git for MVP polling)
 - `src/`
   - `src/db/init_db.py` — creates DB schema
   - `src/db/db_utils.py` — connection helper + CRUD helpers
   - `src/ingestion/backfill.py` — backfill implementation (CSV + env config)
+  - `src/ingestion/poll.py` — global poller using current filings + DB filters
   - `src/api/deps.py` — FastAPI `get_db` dependency
   - `src/detection/`, `src/analysis/`, `src/api/` — scaffolds for next steps
 - `docs/` — documentation (this file)
+- `.github/workflows/poll.yml` — scheduled poller (every 15 minutes)
 
 ---
 
@@ -61,6 +64,15 @@ Timestamps are stored as ISO‑8601 `TEXT` (SQLite `datetime('now')` default) fo
   5. Update `watermarks` per company
 - Supports throttling, retries/backoff, and `DRY_RUN=1`.
 
+## 🛰️ Polling (current)
+- `src/ingestion/poll.py` implements:
+  1. Loads tracked CIKs from `companies`
+  2. Fetches global current filings via `get_current_filings`
+  3. Filters to `8-K`, `10-Q`, `10-K` (+ amendments)
+  4. Inserts new filings (deduped by `accession_id`)
+  5. Updates `watermarks` per company
+- GitHub Actions runs every 15 minutes and commits DB updates to the repo.
+
 ---
 
 ## ✅ Verification checklist (before backfill)
@@ -74,7 +86,6 @@ Timestamps are stored as ISO‑8601 `TEXT` (SQLite `datetime('now')` default) fo
 ---
 
 ## 🚀 Next implementation priorities
-1. Run and validate ingestion for a small company subset (smoke test) and verify watermarks.
+1. Implement detection algorithms in `src/detection/` (frequency spike, size outlier) and write alerts to `alerts` table.
 2. Add basic API endpoints (`/health`, `/companies`, `/companies/{cik}/filings`, `/filings/{accession}`).
-3. Implement detection algorithms in `src/detection/` (frequency spike, size outlier) and write alerts to `alerts` table.
-4. Add comprehensive tests and prepare a Postgres migration plan.
+3. Add comprehensive tests and prepare a Postgres migration plan.
