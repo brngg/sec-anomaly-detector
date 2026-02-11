@@ -74,7 +74,18 @@ def fetch_company(ticker: str) -> Company:
     reraise=True,
 )
 def fetch_filings(company: Company, date_filter: str):
-    return company.get_filings(form=["8-K", "10-K", "10-Q"]).filter(date=date_filter)
+        return company.get_filings(
+        form=[
+            "8-K",
+            "10-K",
+            "10-Q",
+            "8-K/A",
+            "10-Q/A",
+            "10-K/A",
+            "NT 10-K",
+            "NT 10-Q",
+        ]
+    ).filter(date=date_filter)
 
 
 def main() -> int:
