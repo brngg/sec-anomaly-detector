@@ -86,7 +86,12 @@ def main() -> int:
         print("⚠️  SEC_IDENTITY not set. Falling back to default identity.")
         set_identity("Brandon Cheng chengbr3@gmail.com")
 
-    companies_csv = Path(os.getenv("COMPANIES_CSV", str(DEFAULT_COMPANIES_CSV)))
+    companies_csv_str = os.getenv("COMPANIES_CSV", str(DEFAULT_COMPANIES_CSV))
+    companies_csv = Path(companies_csv_str)
+    # If it's a relative path, resolve it relative to REPO_ROOT
+    if not companies_csv.is_absolute():
+        companies_csv = REPO_ROOT / companies_csv
+    companies_csv = companies_csv.resolve()
     tickers = load_tickers(companies_csv)
 
     dry_run = _parse_bool(os.getenv("DRY_RUN", ""))
