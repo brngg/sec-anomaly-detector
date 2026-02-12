@@ -14,7 +14,13 @@ from src.db import db_utils
 
 
 ANOMALY_TYPE = "NT_FILING"
-DEFAULT_SEVERITY = 0.7 # Base severity for NT filings, can be adjusted based on filing type or company if desired.
+DEFAULT_SEVERITY = 0.7  # Base severity for NT filings, can be adjusted based on filing type or company if desired.
+
+# ADD-ON NOTE:
+# - NT filings are flagged as anomalies as-is.
+# - Potential add ons to consider in the future:
+#   - Grace-period logic to reduce severity if a follow-up filing arrives quickly.
+#   - Age-based decay applied in aggregation/UI (not during alert creation).
 
 
 @dataclass(frozen=True)
