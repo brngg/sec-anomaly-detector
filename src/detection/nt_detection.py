@@ -2,23 +2,23 @@
 
 from __future__ import annotations
 
-import json
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, List, Optional, Tuple
+from typing import List, Optional, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from src.db import db_utils
+from src.detection.alerts import insert_alert
 
 
 ANOMALY_TYPE = "NT_FILING"
 DEFAULT_SEVERITY = 0.7  # Base severity for NT filings, can be adjusted based on filing type or company if desired.
 
-# ADD-ON NOTE:
+# MVP NOTE:
 # - NT filings are flagged as anomalies as-is.
-# - Potential add ons to consider in the future:
+# - Potential add-ons to consider in the future:
 #   - Grace-period logic to reduce severity if a follow-up filing arrives quickly.
 #   - Age-based decay applied in aggregation/UI (not during alert creation).
 
@@ -52,7 +52,7 @@ def score_nt_filing(filing_type: str) -> float:
     }
     
     # Default for any other NT form
-    return base.get(filing_type, 0.70)
+    return base.get(filing_type, DEFAULT_SEVERITY)
 
 
 def fetch_nt_filings(conn) -> List[NTFiling]:
@@ -87,46 +87,7 @@ def fetch_nt_filings(conn) -> List[NTFiling]:
     ]
 
 
-def _insert_alert(conn, nt_filing: NTFiling, severity: float = DEFAULT_SEVERITY) -> bool:
-    details = {
-        "cik": nt_filing.cik,
-        "company_name": nt_filing.company_name,
-        "company_ticker": nt_filing.company_ticker,
-        "filing_type": nt_filing.filing_type,
-        "filed_at": nt_filing.filed_at,
-        "filed_date": nt_filing.filed_date,
-    }
-    description = f"{nt_filing.filing_type} non-timely filing notice"
-    dedupe_key = f"{ANOMALY_TYPE}:{nt_filing.accession_id}"
-
-    changes_before = conn.total_changes
-    conn.execute(
-        """
-        INSERT OR IGNORE INTO alerts (
-            accession_id,
-            anomaly_type,
-            severity_score,
-            description,
-            details,
-            status,
-            dedupe_key
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            nt_filing.accession_id,
-            ANOMALY_TYPE,
-            severity,
-            description,
-            json.dumps(details, sort_keys=True),
-            "OPEN",
-            dedupe_key,
-        ),
-    )
-    return conn.total_changes > changes_before
-
-
-def run_nt_detection(severity: float = DEFAULT_SEVERITY) -> Tuple[int, int]:
+def run_nt_detection() -> Tuple[int, int]:
     """Insert alerts for all NT filings. Returns (total_nt, inserted_alerts)."""
     with db_utils.get_conn() as conn:
         nt_filings = fetch_nt_filings(conn)
@@ -134,7 +95,23 @@ def run_nt_detection(severity: float = DEFAULT_SEVERITY) -> Tuple[int, int]:
         inserted = 0
         for nt_filing in nt_filings:
             filing_severity = score_nt_filing(nt_filing.filing_type)
-            if _insert_alert(conn, nt_filing, severity=filing_severity):
+            details = {
+                "cik": nt_filing.cik,
+                "company_name": nt_filing.company_name,
+                "company_ticker": nt_filing.company_ticker,
+                "filing_type": nt_filing.filing_type,
+                "filed_at": nt_filing.filed_at,
+                "filed_date": nt_filing.filed_date,
+            }
+            description = f"{nt_filing.filing_type} non-timely filing notice"
+            if insert_alert(
+                conn,
+                accession_id=nt_filing.accession_id,
+                anomaly_type=ANOMALY_TYPE,
+                severity_score=filing_severity,
+                description=description,
+                details=details,
+            ):
                 inserted += 1
 
     return len(nt_filings), inserted
