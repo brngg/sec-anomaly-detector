@@ -3,12 +3,17 @@
 Automated detection of suspicious filing patterns in SEC Edgar data.
 
 ## Status
-🚧 **In Development** - Week 1 Setup Complete
+🚧 **In Development** - Week 2 Detection MVP in progress
 
 ## Overview
-This system monitors multiple public companies for anomalies in SEC filing behavior:
-- Late filings
-- Unusual 8-K bursts
+This system monitors public companies for anomalies in SEC filing behavior.
+
+Current detections:
+- Non-timely (NT) filings
+- Friday after-hours filings (Friday burying)
+
+Planned detections:
+- Unusual 8-K bursts (spike detector)
 - Suspicious timing patterns
 
 ## Setup
@@ -72,6 +77,13 @@ Setup:
 Run locally (no DB writes):
 ```bash
 DRY_RUN=1 SEC_IDENTITY="Your Name you@example.com" python src/ingestion/poll.py
+```
+
+## Detections (local)
+Run detectors against the local SQLite DB:
+```bash
+python src/detection/nt_detection.py
+python src/detection/friday_detection.py
 ```
 
 ## Project Structure
