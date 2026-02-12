@@ -1,6 +1,6 @@
 # SEC Filing Anomaly Detector — Codebase Summary (Snapshot)
 
-**Date:** 2026-02-09  
+**Date:** 2026-02-12  
 **Purpose:** Automated detection of suspicious filing patterns in SEC EDGAR data (late filings, 8‑K bursts, suspicious timing).
 
 ---
@@ -8,7 +8,8 @@
 ## 🔧 Project status (high level)
 - Week‑1 completed: DB schema implemented, SQLite DB created, DB utilities added, FastAPI dependency wired, ingestion backfill implemented.
 - Polling implemented: global “current filings” poller + GitHub Actions cron (every 15 minutes) that commits DB updates.
-- Next priorities: detection algorithms, basic API endpoints, and alerting logic.
+- Week‑2 in progress: detection MVP started (NT filings + Friday after-hours), shared alert helper added.
+- Next priorities: spike detector, detection runner, basic API endpoints, and alerting polish.
 
 ---
 
@@ -22,7 +23,10 @@
   - `src/ingestion/backfill.py` — backfill implementation (CSV + env config)
   - `src/ingestion/poll.py` — global poller using current filings + DB filters
   - `src/api/deps.py` — FastAPI `get_db` dependency
-  - `src/detection/`, `src/analysis/`, `src/api/` — scaffolds for next steps
+  - `src/detection/nt_detection.py` — NT filing detector (writes alerts)
+  - `src/detection/friday_detection.py` — Friday after-hours detector (writes alerts)
+  - `src/detection/alerts.py` — shared alert insert helper
+  - `src/analysis/`, `src/api/` — scaffolds for next steps
 - `docs/` — documentation (this file)
 - `.github/workflows/poll.yml` — scheduled poller (every 15 minutes)
 
@@ -68,10 +72,22 @@ Timestamps are stored as ISO‑8601 `TEXT` (SQLite `datetime('now')` default) fo
 - `src/ingestion/poll.py` implements:
   1. Loads tracked CIKs from `companies`
   2. Fetches global current filings via `get_current_filings`
-  3. Filters to `8-K`, `10-Q`, `10-K` (+ amendments)
+  3. Filters to `8-K`, `10-Q`, `10-K` (+ amendments) and `NT 10-K`, `NT 10-Q`
   4. Inserts new filings (deduped by `accession_id`)
   5. Updates `watermarks` per company
 - GitHub Actions runs every 15 minutes and commits DB updates to the repo.
+
+---
+
+## 🕵️ Detection (current)
+- `src/detection/nt_detection.py`
+  - Flags `NT %` and `NT-%` filings as anomalies
+  - Scores by form type (fixed mapping) and writes to `alerts`
+- `src/detection/friday_detection.py`
+  - Flags Friday after-hours filings (US/Eastern, >= 4pm)
+  - MVP scope: `8-K` and `8-K/A`
+- `src/detection/alerts.py`
+  - Shared `insert_alert(...)` helper for detectors
 
 ---
 
@@ -86,6 +102,6 @@ Timestamps are stored as ISO‑8601 `TEXT` (SQLite `datetime('now')` default) fo
 ---
 
 ## 🚀 Next implementation priorities
-1. Implement detection algorithms in `src/detection/` (frequency spike, size outlier) and write alerts to `alerts` table.
+1. Implement spike/burst detector and add a detection runner.
 2. Add basic API endpoints (`/health`, `/companies`, `/companies/{cik}/filings`, `/filings/{accession}`).
-3. Add comprehensive tests and prepare a Postgres migration plan.
+3. Add tests and prepare a Postgres migration plan.
