@@ -11,6 +11,7 @@ This system monitors public companies for anomalies in SEC filing behavior.
 Current detections:
 - Non-timely (NT) filings
 - Friday after-hours filings (Friday burying)
+- 8-K monthly spike alerts (company baseline)
 
 Planned detections:
 - Unusual 8-K bursts (spike detector)
@@ -84,6 +85,13 @@ Run detectors against the local SQLite DB:
 ```bash
 python src/detection/nt_detection.py
 python src/detection/friday_detection.py
+python src/detection/8k_spike_detection.py
+```
+
+## Validation (notebook)
+Use the validation notebook to sanity-check alerts:
+```
+/Users/bcheng/Projects/sec-anomoly-detector/notebooks/validation.ipynb
 ```
 
 ## Project Structure

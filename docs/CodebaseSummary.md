@@ -8,8 +8,8 @@
 ## 🔧 Project status (high level)
 - Week‑1 completed: DB schema implemented, SQLite DB created, DB utilities added, FastAPI dependency wired, ingestion backfill implemented.
 - Polling implemented: global “current filings” poller + GitHub Actions cron (every 15 minutes) that commits DB updates.
-- Week‑2 in progress: detection MVP started (NT filings + Friday after-hours), shared alert helper added.
-- Next priorities: spike detector, detection runner, basic API endpoints, and alerting polish.
+- Week‑2 in progress: detection MVP started (NT, Friday after-hours, 8-K monthly spike), shared alert helper added.
+- Next priorities: detection runner, validation workflow, basic API endpoints, and alerting polish.
 
 ---
 
@@ -25,8 +25,10 @@
   - `src/api/deps.py` — FastAPI `get_db` dependency
   - `src/detection/nt_detection.py` — NT filing detector (writes alerts)
   - `src/detection/friday_detection.py` — Friday after-hours detector (writes alerts)
+  - `src/detection/8k_spike_detection.py` — 8-K monthly spike detector (writes alerts)
   - `src/detection/alerts.py` — shared alert insert helper
   - `src/analysis/`, `src/api/` — scaffolds for next steps
+  - `notebooks/validation.ipynb` — validation notebook for detector sanity checks
 - `docs/` — documentation (this file)
 - `.github/workflows/poll.yml` — scheduled poller (every 15 minutes)
 
@@ -86,6 +88,9 @@ Timestamps are stored as ISO‑8601 `TEXT` (SQLite `datetime('now')` default) fo
 - `src/detection/friday_detection.py`
   - Flags Friday after-hours filings (US/Eastern, >= 4pm)
   - MVP scope: `8-K` and `8-K/A`
+- `src/detection/8k_spike_detection.py`
+  - Flags monthly 8-K spikes vs company baseline (zero-months included)
+  - Threshold = mean + 2σ (company-specific)
 - `src/detection/alerts.py`
   - Shared `insert_alert(...)` helper for detectors
 
@@ -102,6 +107,6 @@ Timestamps are stored as ISO‑8601 `TEXT` (SQLite `datetime('now')` default) fo
 ---
 
 ## 🚀 Next implementation priorities
-1. Implement spike/burst detector and add a detection runner.
+1. Add a detection runner (single command for all detectors).
 2. Add basic API endpoints (`/health`, `/companies`, `/companies/{cik}/filings`, `/filings/{accession}`).
 3. Add tests and prepare a Postgres migration plan.
