@@ -80,6 +80,14 @@ def _iter_months(end_month: str, months: int) -> List[str]:
 
 
 def _mean_std(values: List[int]) -> Tuple[float, float]:
+    """Calculate mean and population standard deviation.
+
+    Note: Uses population std dev (dividing by count) rather than sample std dev
+    (dividing by count-1). This is a deliberate choice for anomaly detection:
+    - We have the complete baseline data (not a sample)
+    - Lower std dev = lower threshold = more sensitive detection
+    - For small baselines (MIN_BASELINE_MONTHS=3), this may increase false positives
+    """
     if not values:
         return 0.0, 0.0
     total = 0.0

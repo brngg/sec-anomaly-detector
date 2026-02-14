@@ -85,7 +85,7 @@ Run detectors against the local SQLite DB:
 ```bash
 python src/detection/nt_detection.py
 python src/detection/friday_detection.py
-python src/detection/8k_spike_detection.py
+python src/detection/spike_8k_detection.py
 ```
 
 ## Validation (notebook)
