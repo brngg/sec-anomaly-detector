@@ -9,6 +9,7 @@ from edgar import get_current_filings, set_identity
 from dotenv import load_dotenv
 
 from src.db import db_utils
+from src.detection.run_all import run_all_detections
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -128,6 +129,12 @@ def main() -> int:
         "Summary: "
         f"seen={total_seen} matched={total_matched} inserted={total_inserted} errors={total_errors}"
     )
+
+    if not dry_run and total_inserted > 0:
+        print("New filings inserted; running detectors...")
+        run_all_detections()
+    else:
+        print("No new filings inserted; skipping detectors.")
 
     return 0 if total_errors == 0 else 1
 
