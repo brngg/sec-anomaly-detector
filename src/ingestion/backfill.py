@@ -95,7 +95,7 @@ def main() -> int:
         set_identity(sec_identity)
     else:
         print("⚠️  SEC_IDENTITY not set. Falling back to default identity.")
-        set_identity("Brandon Cheng chengbr3@gmail.com")
+        #set_identity("Brandon Cheng chengbr3@gmail.com")
 
     companies_csv_str = os.getenv("COMPANIES_CSV", str(DEFAULT_COMPANIES_CSV))
     companies_csv = Path(companies_csv_str)
