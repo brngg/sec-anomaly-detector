@@ -1,12 +1,12 @@
 import os
 import sys
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from edgar import Company, set_identity
+from edgar import Company, iter_current_filings_pages, set_identity
 from dotenv import load_dotenv
 
 from src.db import db_utils
@@ -23,7 +23,12 @@ FORM_TYPES = [
     "NT 10-K",
     "NT 10-Q",
 ]
+FORM_TYPES_SET = set(FORM_TYPES)
 DEFAULT_LOOKBACK_DAYS = int(os.getenv("POLL_LOOKBACK_DAYS", "14"))
+CATCHUP_DAYS = int(os.getenv("POLL_CATCHUP_DAYS", "2"))
+ENABLE_CATCHUP = os.getenv("POLL_ENABLE_CATCHUP", "1").strip().lower() not in {"0", "false", "no", "n"}
+CURRENT_PAGE_SIZE = int(os.getenv("POLL_CURRENT_PAGE_SIZE", "100"))
+FEED_BUFFER_HOURS = int(os.getenv("POLL_FEED_BUFFER_HOURS", "6"))
 SLEEP_SECONDS = float(os.getenv("POLL_SLEEP_SECONDS", "0.11"))
 
 
@@ -73,6 +78,27 @@ def _since_date(last_seen: str | None) -> str:
     return fallback.date().isoformat()
 
 
+def _coerce_dt(value) -> datetime | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    if isinstance(value, date):
+        return datetime.combine(value, datetime.min.time(), tzinfo=timezone.utc)
+    if isinstance(value, str):
+        return _parse_dt(value)
+    return _parse_dt(str(value))
+
+
+def _is_stale(last_seen: str | None, cutoff: datetime) -> bool:
+    if not last_seen:
+        return True
+    parsed = _parse_dt(last_seen)
+    if not parsed:
+        return True
+    return parsed < cutoff
+
+
 def main() -> int:
     load_dotenv(REPO_ROOT / ".env", override=True)
 
@@ -91,6 +117,13 @@ def main() -> int:
     total_seen = 0
     total_inserted = 0
     total_errors = 0
+    feed_seen = 0
+    feed_matched = 0
+    feed_inserted = 0
+    feed_pages = 0
+    catchup_companies = 0
+    catchup_seen = 0
+    catchup_inserted = 0
 
     with db_utils.get_conn() as db_conn:
         rows = db_conn.execute(
@@ -108,74 +141,190 @@ def main() -> int:
 
         print(f"Tracked companies: {len(rows)}")
 
-        for index, row in enumerate(rows, 1):
-            cik = int(row["cik"])
-            ticker = row["ticker"]
-            last_seen = row["last_seen_filed_at"]
-            since_date = _since_date(last_seen)
-            label = ticker or str(cik)
+        tracked_ciks = {int(row["cik"]) for row in rows}
+        last_seen_map = {int(row["cik"]): row["last_seen_filed_at"] for row in rows}
 
-            fetched = 0
-            inserted = 0
-            max_filed_at = None
+        # Fast path: current filings feed (last ~24 hours) with pagination
+        page_size = CURRENT_PAGE_SIZE if CURRENT_PAGE_SIZE in {10, 20, 40, 80, 100} else 100
 
-            try:
-                company = Company(label)
-                filings = company.get_filings(form=FORM_TYPES).filter(date=f"{since_date}:")
-                for filing in filings:
-                    fetched += 1
-                    total_seen += 1
-                    filed_at = filing.acceptance_datetime or filing.filing_date
-                    filed_at_str = _stringify_dt(filed_at)
-                    filed_date_str = _stringify_dt(filing.filing_date)
+        now_utc = datetime.now(timezone.utc)
+        stale_cutoff = now_utc - timedelta(days=CATCHUP_DAYS)
+        non_stale_last_seen = []
+        for cik, last_seen in last_seen_map.items():
+            parsed = _parse_dt(last_seen) if last_seen else None
+            if parsed and parsed >= stale_cutoff:
+                non_stale_last_seen.append(parsed)
+        feed_cutoff = None
+        if non_stale_last_seen:
+            buffer_hours = max(FEED_BUFFER_HOURS, 0)
+            feed_cutoff = min(non_stale_last_seen) - timedelta(hours=buffer_hours)
+            print(f"Feed cutoff: {feed_cutoff.isoformat()} (buffer {buffer_hours}h)")
 
-                    max_filed_at = _resolve_last_seen(max_filed_at, filed_at_str)
+        max_seen_by_cik: dict[int, str | None] = {}
+        for page in iter_current_filings_pages(page_size=page_size):
+            feed_pages += 1
+            page_entries = page.data.to_pylist()
+            if not page_entries:
+                continue
 
-                    if dry_run:
-                        inserted += 1
-                        total_inserted += 1
-                        continue
+            break_after = False
+            if feed_cutoff:
+                oldest_dt = _coerce_dt(page_entries[-1].get("accepted")) or _coerce_dt(
+                    page_entries[-1].get("filing_date")
+                )
+                if oldest_dt and oldest_dt < feed_cutoff:
+                    break_after = True
 
+            for entry in page_entries:
+                if entry.get("form") not in FORM_TYPES_SET:
+                    continue
+                feed_seen += 1
+                total_seen += 1
+                try:
+                    filing_cik = int(entry.get("cik"))
+                except Exception:
+                    continue
+
+                if filing_cik not in tracked_ciks:
+                    continue
+
+                feed_matched += 1
+                filed_at = entry.get("accepted") or entry.get("filing_date")
+                filed_at_str = _stringify_dt(filed_at)
+                filed_date_str = _stringify_dt(entry.get("filing_date"))
+                max_seen_by_cik[filing_cik] = _resolve_last_seen(
+                    max_seen_by_cik.get(filing_cik), filed_at_str
+                )
+
+                if dry_run:
+                    feed_inserted += 1
+                    total_inserted += 1
+                    continue
+
+                try:
                     changes_before_insert = db_conn.total_changes
                     db_utils.insert_filing(
                         db_conn,
-                        filing.accession_no,
-                        cik,
-                        filing.form,
+                        entry.get("accession_number"),
+                        filing_cik,
+                        entry.get("form"),
                         filed_at_str,
                         filed_date_str,
-                        filing.primary_document or None,
+                        None,
                     )
-
                     if db_conn.total_changes > changes_before_insert:
-                        inserted += 1
+                        feed_inserted += 1
                         total_inserted += 1
+                except Exception as e:
+                    total_errors += 1
+                    if not dry_run:
+                        db_utils.update_watermark(
+                            db_conn,
+                            cik=filing_cik,
+                            last_seen_filed_at=last_seen_map.get(filing_cik),
+                            last_run_at=datetime.now().isoformat(),
+                            last_run_status="FAIL",
+                            last_error=str(e),
+                        )
 
-                if not dry_run:
-                    resolved_last_seen = _resolve_last_seen(last_seen, max_filed_at)
-                    db_utils.update_watermark(
-                        db_conn,
-                        cik=cik,
-                        last_seen_filed_at=resolved_last_seen,
-                        last_run_at=datetime.now().isoformat(),
-                        last_run_status="SUCCESS",
-                        last_error=None,
-                    )
-            except Exception as e:
-                total_errors += 1
-                if not dry_run:
-                    db_utils.update_watermark(
-                        db_conn,
-                        cik=cik,
-                        last_seen_filed_at=last_seen,
-                        last_run_at=datetime.now().isoformat(),
-                        last_run_status="FAIL",
-                        last_error=str(e),
-                    )
-                print(f"Error processing {label}: {e}")
-            finally:
-                print(f"[{index}/{len(rows)}] {label}: fetched={fetched} inserted={inserted}")
-                time.sleep(SLEEP_SECONDS)
+            if break_after:
+                break
+
+        if not dry_run:
+            for cik, max_seen in max_seen_by_cik.items():
+                resolved = _resolve_last_seen(last_seen_map.get(cik), max_seen)
+                last_seen_map[cik] = resolved
+                db_utils.update_watermark(
+                    db_conn,
+                    cik=cik,
+                    last_seen_filed_at=resolved,
+                    last_run_at=datetime.now().isoformat(),
+                    last_run_status="SUCCESS",
+                    last_error=None,
+                )
+
+        # Catch-up path: only for stale/missing watermarks
+        if ENABLE_CATCHUP:
+            cutoff = datetime.now(timezone.utc) - timedelta(days=CATCHUP_DAYS)
+            stale_rows = [
+                row for row in rows if _is_stale(last_seen_map.get(int(row["cik"])), cutoff)
+            ]
+            if stale_rows:
+                print(f"Catch-up companies: {len(stale_rows)} (stale > {CATCHUP_DAYS} days)")
+
+            for index, row in enumerate(stale_rows, 1):
+                cik = int(row["cik"])
+                ticker = row["ticker"]
+                last_seen = last_seen_map.get(cik)
+                since_date = _since_date(last_seen)
+                label = ticker or str(cik)
+
+                fetched = 0
+                inserted = 0
+                max_filed_at = None
+                catchup_companies += 1
+
+                try:
+                    company = Company(label)
+                    filings = company.get_filings(form=FORM_TYPES).filter(date=f"{since_date}:")
+                    for filing in filings:
+                        fetched += 1
+                        catchup_seen += 1
+                        total_seen += 1
+                        filed_at = filing.acceptance_datetime or filing.filing_date
+                        filed_at_str = _stringify_dt(filed_at)
+                        filed_date_str = _stringify_dt(filing.filing_date)
+
+                        max_filed_at = _resolve_last_seen(max_filed_at, filed_at_str)
+
+                        if dry_run:
+                            inserted += 1
+                            catchup_inserted += 1
+                            total_inserted += 1
+                            continue
+
+                        changes_before_insert = db_conn.total_changes
+                        db_utils.insert_filing(
+                            db_conn,
+                            filing.accession_no,
+                            cik,
+                            filing.form,
+                            filed_at_str,
+                            filed_date_str,
+                            filing.primary_document or None,
+                        )
+
+                        if db_conn.total_changes > changes_before_insert:
+                            inserted += 1
+                            catchup_inserted += 1
+                            total_inserted += 1
+
+                    if not dry_run:
+                        resolved_last_seen = _resolve_last_seen(last_seen, max_filed_at)
+                        last_seen_map[cik] = resolved_last_seen
+                        db_utils.update_watermark(
+                            db_conn,
+                            cik=cik,
+                            last_seen_filed_at=resolved_last_seen,
+                            last_run_at=datetime.now().isoformat(),
+                            last_run_status="SUCCESS",
+                            last_error=None,
+                        )
+                except Exception as e:
+                    total_errors += 1
+                    if not dry_run:
+                        db_utils.update_watermark(
+                            db_conn,
+                            cik=cik,
+                            last_seen_filed_at=last_seen,
+                            last_run_at=datetime.now().isoformat(),
+                            last_run_status="FAIL",
+                            last_error=str(e),
+                        )
+                    print(f"Error processing {label}: {e}")
+                finally:
+                    print(f"[catch-up {index}/{len(stale_rows)}] {label}: fetched={fetched} inserted={inserted}")
+                    time.sleep(SLEEP_SECONDS)
 
     end_time = datetime.now()
     elapsed = (end_time - start_time).total_seconds()
@@ -184,6 +333,16 @@ def main() -> int:
         "Summary: "
         f"seen={total_seen} inserted={total_inserted} errors={total_errors}"
     )
+    print(
+        "Feed summary: "
+        f"seen={feed_seen} matched={feed_matched} inserted={feed_inserted}"
+    )
+    print(f"Feed pages scanned: {feed_pages}")
+    if ENABLE_CATCHUP:
+        print(
+            "Catch-up summary: "
+            f"companies={catchup_companies} seen={catchup_seen} inserted={catchup_inserted}"
+        )
 
     if not dry_run and total_inserted > 0:
         print("New filings inserted; running detectors...")
