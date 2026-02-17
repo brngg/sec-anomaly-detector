@@ -58,6 +58,11 @@ CREATE INDEX IF NOT EXISTS idx_alerts_created_at
 
 CREATE INDEX IF NOT EXISTS idx_alerts_status
     ON alerts (status);
+
+CREATE TABLE IF NOT EXISTS poll_state (
+    key TEXT PRIMARY KEY,
+    value TEXT
+);
 """
 
 def create_db(path: Path = DB_PATH, reset: bool = False) -> None:

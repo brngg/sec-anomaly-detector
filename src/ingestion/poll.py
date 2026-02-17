@@ -27,6 +27,7 @@ FORM_TYPES_SET = set(FORM_TYPES)
 DEFAULT_LOOKBACK_DAYS = int(os.getenv("POLL_LOOKBACK_DAYS", "14"))
 CATCHUP_DAYS = int(os.getenv("POLL_CATCHUP_DAYS", "2"))
 ENABLE_CATCHUP = os.getenv("POLL_ENABLE_CATCHUP", "1").strip().lower() not in {"0", "false", "no", "n"}
+CATCHUP_COOLDOWN_HOURS = int(os.getenv("POLL_CATCHUP_COOLDOWN_HOURS", "48"))
 CURRENT_PAGE_SIZE = int(os.getenv("POLL_CURRENT_PAGE_SIZE", "100"))
 FEED_BUFFER_HOURS = int(os.getenv("POLL_FEED_BUFFER_HOURS", "6"))
 SLEEP_SECONDS = float(os.getenv("POLL_SLEEP_SECONDS", "0.11"))
@@ -99,6 +100,34 @@ def _is_stale(last_seen: str | None, cutoff: datetime) -> bool:
     return parsed < cutoff
 
 
+def _ensure_poll_state(conn) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS poll_state (
+            key TEXT PRIMARY KEY,
+            value TEXT
+        )
+        """
+    )
+
+
+def _get_poll_state(conn, key: str) -> str | None:
+    row = conn.execute("SELECT value FROM poll_state WHERE key = ?", (key,)).fetchone()
+    return row[0] if row else None
+
+
+def _set_poll_state(conn, key: str, value: str) -> None:
+    conn.execute(
+        """
+        INSERT INTO poll_state (key, value)
+        VALUES (?, ?)
+        ON CONFLICT(key) DO UPDATE SET
+            value = excluded.value
+        """,
+        (key, value),
+    )
+
+
 def main() -> int:
     load_dotenv(REPO_ROOT / ".env", override=True)
 
@@ -112,6 +141,7 @@ def main() -> int:
     dry_run = _parse_bool(os.getenv("DRY_RUN", ""))
 
     start_time = datetime.now()
+    overall_start = time.perf_counter()
     print(f"Starting poll at {start_time.isoformat()}")
 
     total_seen = 0
@@ -126,6 +156,7 @@ def main() -> int:
     catchup_inserted = 0
 
     with db_utils.get_conn() as db_conn:
+        _ensure_poll_state(db_conn)
         rows = db_conn.execute(
             """
             SELECT c.cik, c.ticker, w.last_seen_filed_at
@@ -160,7 +191,9 @@ def main() -> int:
             feed_cutoff = min(non_stale_last_seen) - timedelta(hours=buffer_hours)
             print(f"Feed cutoff: {feed_cutoff.isoformat()} (buffer {buffer_hours}h)")
 
+        print("Scanning current feed...")
         max_seen_by_cik: dict[int, str | None] = {}
+        feed_start = time.perf_counter()
         for page in iter_current_filings_pages(page_size=page_size):
             feed_pages += 1
             page_entries = page.data.to_pylist()
@@ -229,6 +262,8 @@ def main() -> int:
 
             if break_after:
                 break
+        feed_duration = time.perf_counter() - feed_start
+        print(f"Finished feed scan in {feed_duration:.2f}s")
 
         if not dry_run:
             for cik, max_seen in max_seen_by_cik.items():
@@ -244,13 +279,32 @@ def main() -> int:
                 )
 
         # Catch-up path: only for stale/missing watermarks
+        catchup_skipped = False
         if ENABLE_CATCHUP:
-            cutoff = datetime.now(timezone.utc) - timedelta(days=CATCHUP_DAYS)
-            stale_rows = [
-                row for row in rows if _is_stale(last_seen_map.get(int(row["cik"])), cutoff)
-            ]
-            if stale_rows:
-                print(f"Catch-up companies: {len(stale_rows)} (stale > {CATCHUP_DAYS} days)")
+            catchup_allowed = True
+            last_catchup_at = _get_poll_state(db_conn, "last_catchup_at")
+            if last_catchup_at:
+                parsed = _parse_dt(last_catchup_at)
+                if parsed:
+                    next_allowed = parsed + timedelta(hours=CATCHUP_COOLDOWN_HOURS)
+                    if now_utc < next_allowed:
+                        catchup_allowed = False
+                        catchup_skipped = True
+                        print(
+                            "Catch-up skipped (cooldown). "
+                            f"Next eligible after {next_allowed.isoformat()}"
+                        )
+
+            if catchup_allowed:
+                catchup_start = time.perf_counter()
+                cutoff = datetime.now(timezone.utc) - timedelta(days=CATCHUP_DAYS)
+                stale_rows = [
+                    row for row in rows if _is_stale(last_seen_map.get(int(row["cik"])), cutoff)
+                ]
+                if stale_rows:
+                    print(f"Catch-up companies: {len(stale_rows)} (stale > {CATCHUP_DAYS} days)")
+                else:
+                    print("Catch-up companies: 0")
 
             for index, row in enumerate(stale_rows, 1):
                 cik = int(row["cik"])
@@ -263,6 +317,7 @@ def main() -> int:
                 inserted = 0
                 max_filed_at = None
                 catchup_companies += 1
+                company_start = time.perf_counter()
 
                 try:
                     company = Company(label)
@@ -323,10 +378,17 @@ def main() -> int:
                         )
                     print(f"Error processing {label}: {e}")
                 finally:
-                    print(f"[catch-up {index}/{len(stale_rows)}] {label}: fetched={fetched} inserted={inserted}")
+                    company_duration = time.perf_counter() - company_start
+                    print(
+                        f"[catch-up {index}/{len(stale_rows)}] {label}: "
+                        f"fetched={fetched} inserted={inserted} duration={company_duration:.2f}s"
+                    )
                     time.sleep(SLEEP_SECONDS)
+            catchup_duration = time.perf_counter() - catchup_start
+            _set_poll_state(db_conn, "last_catchup_at", now_utc.isoformat())
 
     end_time = datetime.now()
+    overall_duration = time.perf_counter() - overall_start
     elapsed = (end_time - start_time).total_seconds()
     print(f"Completed at {end_time.isoformat()} (elapsed {elapsed:.2f}s)")
     print(
@@ -337,12 +399,17 @@ def main() -> int:
         "Feed summary: "
         f"seen={feed_seen} matched={feed_matched} inserted={feed_inserted}"
     )
-    print(f"Feed pages scanned: {feed_pages}")
+    print(f"Feed pages scanned: {feed_pages} | duration={feed_duration:.2f}s")
     if ENABLE_CATCHUP:
         print(
             "Catch-up summary: "
             f"companies={catchup_companies} seen={catchup_seen} inserted={catchup_inserted}"
         )
+        if catchup_skipped:
+            print(f"Catch-up cooldown: {CATCHUP_COOLDOWN_HOURS}h (skipped)")
+        elif catchup_companies > 0:
+            print(f"Catch-up duration: {catchup_duration:.2f}s")
+    print(f"Total runtime: {overall_duration:.2f}s")
 
     if not dry_run and total_inserted > 0:
         print("New filings inserted; running detectors...")
