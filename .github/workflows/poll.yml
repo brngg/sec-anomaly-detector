@@ -31,6 +31,12 @@ jobs:
       - name: Run poller
         env:
           SEC_IDENTITY: ${{ secrets.SEC_IDENTITY }}
+          POLL_ENABLE_CATCHUP: "1"
+          POLL_CATCHUP_DAYS: "2"
+          POLL_CATCHUP_COOLDOWN_HOURS: "48"
+          POLL_CURRENT_PAGE_SIZE: "100"
+          POLL_FEED_BUFFER_HOURS: "6"
+          POLL_LOOKBACK_DAYS: "14"
         run: python src/ingestion/poll.py
 
       - name: Commit updated DB
