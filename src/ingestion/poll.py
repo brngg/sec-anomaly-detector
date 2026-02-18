@@ -280,6 +280,9 @@ def main() -> int:
 
         # Catch-up path: only for stale/missing watermarks
         catchup_skipped = False
+        stale_rows: list = []
+        catchup_start = None
+        catchup_duration = 0.0
         if ENABLE_CATCHUP:
             catchup_allowed = True
             last_catchup_at = _get_poll_state(db_conn, "last_catchup_at")
@@ -384,7 +387,8 @@ def main() -> int:
                         f"fetched={fetched} inserted={inserted} duration={company_duration:.2f}s"
                     )
                     time.sleep(SLEEP_SECONDS)
-            catchup_duration = time.perf_counter() - catchup_start
+            if catchup_start is not None:
+                catchup_duration = time.perf_counter() - catchup_start
             _set_poll_state(db_conn, "last_catchup_at", now_utc.isoformat())
 
     end_time = datetime.now()
