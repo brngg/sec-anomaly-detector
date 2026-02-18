@@ -1,15 +1,15 @@
 # SEC Filing Anomaly Detector — Codebase Summary (Snapshot)
 
-**Date:** 2026-02-12  
+**Date:** 2026-02-18  
 **Purpose:** Automated detection of suspicious filing patterns in SEC EDGAR data (late filings, 8‑K bursts, suspicious timing).
 
 ---
 
 ## 🔧 Project status (high level)
 - Week‑1 completed: DB schema implemented, SQLite DB created, DB utilities added, FastAPI dependency wired, ingestion backfill implemented.
-- Polling implemented: global “current filings” poller + GitHub Actions cron (every 15 minutes) that commits DB updates.
+- Polling implemented: hybrid poller (current feed + catch-up) + GitHub Actions cron (every 15 minutes) that commits DB updates.
 - Week‑2 in progress: detection MVP started (NT, Friday after-hours, 8-K monthly spike), shared alert helper added.
-- Next priorities: detection runner, validation workflow, basic API endpoints, and alerting polish.
+- Next priorities: validation workflow polish, basic API endpoints, and alerting UX.
 
 ---
 
@@ -21,7 +21,7 @@
   - `src/db/init_db.py` — creates DB schema
   - `src/db/db_utils.py` — connection helper + CRUD helpers
   - `src/ingestion/backfill.py` — backfill implementation (CSV + env config)
-  - `src/ingestion/poll.py` — global poller using current filings + DB filters
+- `src/ingestion/poll.py` — hybrid poller (current feed + catch-up) with cooldown and timings
   - `src/api/deps.py` — FastAPI `get_db` dependency
   - `src/detection/nt_detection.py` — NT filing detector (writes alerts)
   - `src/detection/friday_detection.py` — Friday after-hours detector (writes alerts)
@@ -45,6 +45,8 @@ Tables:
   - Indexes: `idx_filing_events_cik_type_filed_at`, `idx_filing_events_filed_at`
 - `watermarks`
   - `cik` PRIMARY KEY, `last_seen_filed_at`, `updated_at`, `last_run_at`, `last_run_status`, `last_error`
+- `poll_state`
+  - `key` PRIMARY KEY, `value` — internal poller state (e.g., last catch-up timestamp)
 - `alerts`
   - `alert_id` PK, `accession_id` FK → `filing_events(accession_id)`, `anomaly_type`, `severity_score`, `description`, `details` (JSON text), `status`, `dedupe_key` UNIQUE, `created_at`
 
@@ -71,12 +73,14 @@ Timestamps are stored as ISO‑8601 `TEXT` (SQLite `datetime('now')` default) fo
 - Supports throttling, retries/backoff, and `DRY_RUN=1`.
 
 ## 🛰️ Polling (current)
-- `src/ingestion/poll.py` implements:
-  1. Loads tracked CIKs from `companies`
-  2. Fetches global current filings via `get_current_filings`
-  3. Filters to `8-K`, `10-Q`, `10-K` (+ amendments) and `NT 10-K`, `NT 10-Q`
-  4. Inserts new filings (deduped by `accession_id`)
-  5. Updates `watermarks` per company
+- `src/ingestion/poll.py` implements a hybrid poller:
+  1. Loads tracked CIKs from `companies` + watermarks
+  2. Scans **all pages** of the current filings feed, filters to target forms and tracked CIKs
+  3. Inserts new filings (deduped by `accession_id`)
+  4. Updates `watermarks` per company based on the latest seen filing
+  5. Optional catch-up: for **stale/missing** watermarks, queries per-company filings since last seen
+  6. Catch-up cooldown stored in `poll_state` to prevent running every poll
+  7. Emits timing logs for feed scan, per-company catch-up, and total runtime
 - GitHub Actions runs every 15 minutes and commits DB updates to the repo.
 
 ---
@@ -110,3 +114,11 @@ Timestamps are stored as ISO‑8601 `TEXT` (SQLite `datetime('now')` default) fo
 1. Add a detection runner (single command for all detectors).
 2. Add basic API endpoints (`/health`, `/companies`, `/companies/{cik}/filings`, `/filings/{accession}`).
 3. Add tests and prepare a Postgres migration plan.
+
+---
+
+## 🛠️ Fixes & Improvements (recent)
+- **Hybrid poller:** replaced single-page current feed with full feed scan plus catch-up for stale companies.
+- **Cooldown:** added `poll_state` table and `POLL_CATCHUP_COOLDOWN_HOURS` to throttle catch-up.
+- **Early exit:** feed scan can stop early using a safety buffer (`POLL_FEED_BUFFER_HOURS`).
+- **Timings:** added feed and catch-up duration logging to surface runtime hotspots.

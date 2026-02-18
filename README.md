@@ -80,6 +80,22 @@ Run locally (no DB writes):
 DRY_RUN=1 SEC_IDENTITY="Your Name you@example.com" python src/ingestion/poll.py
 ```
 
+### Poller behavior (hybrid)
+The poller is designed for both speed and correctness:
+- **Fast path:** Scans the full current filings feed (all pages), filters to tracked CIKs + forms.
+- **Catch-up path:** For companies with stale/missing watermarks, queries filings since last seen.
+
+Key env vars (optional):
+- `POLL_ENABLE_CATCHUP` (default `1`)
+- `POLL_CATCHUP_DAYS` (default `2`)
+- `POLL_CATCHUP_COOLDOWN_HOURS` (default `48`) — prevents catch-up from running every poll
+- `POLL_CURRENT_PAGE_SIZE` (default `100`)
+- `POLL_FEED_BUFFER_HOURS` (default `6`) — safety buffer before ending feed scan early
+- `POLL_LOOKBACK_DAYS` (default `14`) — used when watermark is missing
+
+Note: the poller updates `watermarks` (and `poll_state`) even if no new filings are inserted,
+so `data/sec_anomaly.db` can change on runs with `inserted=0`.
+
 ## Detections (local)
 Run detectors against the local SQLite DB:
 ```bash
