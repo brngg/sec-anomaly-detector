@@ -3,7 +3,7 @@
 Automated detection of suspicious filing patterns in SEC Edgar data.
 
 ## Status
-🚧 **In Development** - Week 2 Detection MVP in progress
+**In Development** - Week 2 Detection MVP in progress
 
 ## Overview
 This system monitors public companies for anomalies in SEC filing behavior.

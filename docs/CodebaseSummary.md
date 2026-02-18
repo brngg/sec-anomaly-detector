@@ -5,7 +5,7 @@
 
 ---
 
-## 🔧 Project status (high level)
+## Project status (high level)
 - Week‑1 completed: DB schema implemented, SQLite DB created, DB utilities added, FastAPI dependency wired, ingestion backfill implemented.
 - Polling implemented: hybrid poller (current feed + catch-up) + GitHub Actions cron (every 15 minutes) that commits DB updates.
 - Week‑2 in progress: detection MVP started (NT, Friday after-hours, 8-K monthly spike), shared alert helper added.
@@ -13,7 +13,7 @@
 
 ---
 
-## 📁 Repository layout (key files)
+## Repository layout (key files)
 - `README.md` — project overview & setup
 - `requirements.txt` — pinned deps (includes `edgartools`, `fastapi`)
 - `data/` — runtime DB: `sec_anomaly.db` (tracked in git for MVP polling)
@@ -34,7 +34,7 @@
 
 ---
 
-## 🗄️ Database schema (implemented)
+## Database schema (implemented)
 - **DB:** `data/sec_anomaly.db` (SQLite)
 
 Tables:
@@ -54,7 +54,7 @@ Timestamps are stored as ISO‑8601 `TEXT` (SQLite `datetime('now')` default) fo
 
 ---
 
-## 🧩 DB helpers (`src/db/db_utils.py`)
+## DB helpers (`src/db/db_utils.py`)
 - `get_conn()` — context manager that yields a `sqlite3.Connection`, sets `PRAGMA foreign_keys = ON`, commits on success and rollbacks on error.
 - `upsert_company(conn, ...)`, `insert_filing(conn, ...)`, `update_watermark(conn, ...)` — central CRUD helpers to use from ingestion and API.
 - `foreign_key_check(conn)` — helper to verify referential integrity.
@@ -63,7 +63,7 @@ Timestamps are stored as ISO‑8601 `TEXT` (SQLite `datetime('now')` default) fo
 
 ---
 
-## 🔁 Ingestion / Backfill (current)
+## Ingestion / Backfill (current)
 - `src/ingestion/backfill.py` implements:
   1. CSV‑driven ticker list (`data/companies.csv` by default)
   2. `SEC_IDENTITY` env‑var configuration (fallback with warning)
@@ -72,7 +72,7 @@ Timestamps are stored as ISO‑8601 `TEXT` (SQLite `datetime('now')` default) fo
   5. Update `watermarks` per company
 - Supports throttling, retries/backoff, and `DRY_RUN=1`.
 
-## 🛰️ Polling (current)
+## Polling (current)
 - `src/ingestion/poll.py` implements a hybrid poller:
   1. Loads tracked CIKs from `companies` + watermarks
   2. Scans **all pages** of the current filings feed, filters to target forms and tracked CIKs
@@ -85,7 +85,7 @@ Timestamps are stored as ISO‑8601 `TEXT` (SQLite `datetime('now')` default) fo
 
 ---
 
-## 🕵️ Detection (current)
+## Detection (current)
 - `src/detection/nt_detection.py`
   - Flags `NT %` and `NT-%` filings as anomalies
   - Scores by form type (fixed mapping) and writes to `alerts`
@@ -100,7 +100,7 @@ Timestamps are stored as ISO‑8601 `TEXT` (SQLite `datetime('now')` default) fo
 
 ---
 
-## ✅ Verification checklist (before backfill)
+## Verification checklist (before backfill)
 - `ls -l data/sec_anomaly.db` — DB file exists
 - `sqlite3 data/sec_anomaly.db ".tables"` — tables present
 - `python3 -c "from src.db.db_utils import get_conn; with get_conn() as c: print(c.execute('PRAGMA foreign_keys;').fetchone()[0])"` → should print `1`
@@ -110,14 +110,14 @@ Timestamps are stored as ISO‑8601 `TEXT` (SQLite `datetime('now')` default) fo
 
 ---
 
-## 🚀 Next implementation priorities
+## Next implementation priorities
 1. Add a detection runner (single command for all detectors).
 2. Add basic API endpoints (`/health`, `/companies`, `/companies/{cik}/filings`, `/filings/{accession}`).
 3. Add tests and prepare a Postgres migration plan.
 
 ---
 
-## 🛠️ Fixes & Improvements (recent)
+## Fixes & Improvements (recent)
 - **Hybrid poller:** replaced single-page current feed with full feed scan plus catch-up for stale companies.
 - **Cooldown:** added `poll_state` table and `POLL_CATCHUP_COOLDOWN_HOURS` to throttle catch-up.
 - **Early exit:** feed scan can stop early using a safety buffer (`POLL_FEED_BUFFER_HOURS`).
