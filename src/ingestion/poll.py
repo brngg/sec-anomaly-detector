@@ -28,6 +28,8 @@ DEFAULT_LOOKBACK_DAYS = int(os.getenv("POLL_LOOKBACK_DAYS", "14"))
 CATCHUP_DAYS = int(os.getenv("POLL_CATCHUP_DAYS", "2"))
 ENABLE_CATCHUP = os.getenv("POLL_ENABLE_CATCHUP", "1").strip().lower() not in {"0", "false", "no", "n"}
 CATCHUP_COOLDOWN_HOURS = int(os.getenv("POLL_CATCHUP_COOLDOWN_HOURS", "48"))
+STALE_RUN_HOURS = int(os.getenv("POLL_STALE_RUN_HOURS", "6"))
+STALE_RUN_THRESHOLD_PCT = float(os.getenv("POLL_STALE_RUN_THRESHOLD_PCT", "0.8"))
 CURRENT_PAGE_SIZE = int(os.getenv("POLL_CURRENT_PAGE_SIZE", "100"))
 FEED_BUFFER_HOURS = int(os.getenv("POLL_FEED_BUFFER_HOURS", "6"))
 SLEEP_SECONDS = float(os.getenv("POLL_SLEEP_SECONDS", "0.11"))
@@ -142,6 +144,7 @@ def main() -> int:
 
     start_time = datetime.now()
     overall_start = time.perf_counter()
+    now_utc = datetime.now(timezone.utc)
     print(f"Starting poll at {start_time.isoformat()}")
 
     total_seen = 0
@@ -159,7 +162,7 @@ def main() -> int:
         _ensure_poll_state(db_conn)
         rows = db_conn.execute(
             """
-            SELECT c.cik, c.ticker, w.last_seen_filed_at
+            SELECT c.cik, c.ticker, w.last_seen_filed_at, w.last_run_at
             FROM companies c
             LEFT JOIN watermarks w ON w.cik = c.cik
             ORDER BY c.cik
@@ -170,10 +173,28 @@ def main() -> int:
             print("No tracked companies found in DB. Exiting.")
             return 1
 
+        _set_poll_state(db_conn, "last_poll_at", now_utc.isoformat())
+
         print(f"Tracked companies: {len(rows)}")
 
         tracked_ciks = {int(row["cik"]) for row in rows}
         last_seen_map = {int(row["cik"]): row["last_seen_filed_at"] for row in rows}
+        last_run_map = {int(row["cik"]): row["last_run_at"] for row in rows}
+        stale_run_cutoff = now_utc - timedelta(hours=STALE_RUN_HOURS)
+        stale_runs = 0
+        for cik in tracked_ciks:
+            last_run = last_run_map.get(cik)
+            parsed = _parse_dt(last_run) if last_run else None
+            if parsed is None or parsed < stale_run_cutoff:
+                stale_runs += 1
+        if tracked_ciks:
+            stale_ratio = stale_runs / len(tracked_ciks)
+            if stale_ratio >= STALE_RUN_THRESHOLD_PCT:
+                print(
+                    "Warning: poller staleness detected. "
+                    f"{stale_runs}/{len(tracked_ciks)} companies have last_run_at "
+                    f"older than {STALE_RUN_HOURS}h."
+                )
 
         # Fast path: current filings feed (last ~24 hours) with pagination
         page_size = CURRENT_PAGE_SIZE if CURRENT_PAGE_SIZE in {10, 20, 40, 80, 100} else 100
@@ -395,16 +416,16 @@ def main() -> int:
     overall_duration = time.perf_counter() - overall_start
     elapsed = (end_time - start_time).total_seconds()
     print(f"Completed at {end_time.isoformat()} (elapsed {elapsed:.2f}s)")
-    print(
-        "Summary: "
-        f"seen={total_seen} inserted={total_inserted} errors={total_errors}"
-    )
-    print(
-        "Feed summary: "
-        f"seen={feed_seen} matched={feed_matched} inserted={feed_inserted}"
-    )
-    print(f"Feed pages scanned: {feed_pages} | duration={feed_duration:.2f}s")
-    if ENABLE_CATCHUP:
+    if ENABLE_CATCHUP and (catchup_companies > 0 or catchup_skipped):
+        print(
+            "Summary: "
+            f"seen={total_seen} inserted={total_inserted} errors={total_errors}"
+        )
+        print(
+            "Feed summary: "
+            f"seen={feed_seen} matched={feed_matched} inserted={feed_inserted}"
+        )
+        print(f"Feed pages scanned: {feed_pages} | duration={feed_duration:.2f}s")
         print(
             "Catch-up summary: "
             f"companies={catchup_companies} seen={catchup_seen} inserted={catchup_inserted}"
@@ -413,7 +434,15 @@ def main() -> int:
             print(f"Catch-up cooldown: {CATCHUP_COOLDOWN_HOURS}h (skipped)")
         elif catchup_companies > 0:
             print(f"Catch-up duration: {catchup_duration:.2f}s")
-    print(f"Total runtime: {overall_duration:.2f}s")
+        print(f"Total runtime: {overall_duration:.2f}s")
+    else:
+        print(
+            "Summary: "
+            f"feed_seen={feed_seen} matched={feed_matched} "
+            f"inserted={feed_inserted} errors={total_errors} "
+            f"runtime={overall_duration:.2f}s"
+        )
+        print(f"Feed pages scanned: {feed_pages} | duration={feed_duration:.2f}s")
 
     if not dry_run and total_inserted > 0:
         print("New filings inserted; running detectors...")
