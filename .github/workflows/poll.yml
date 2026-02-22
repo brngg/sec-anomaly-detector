@@ -37,7 +37,10 @@ jobs:
           POLL_CURRENT_PAGE_SIZE: "100"
           POLL_FEED_BUFFER_HOURS: "6"
           POLL_LOOKBACK_DAYS: "14"
-        run: python src/ingestion/poll.py
+        run: |
+          date -u +"UTC start: %Y-%m-%dT%H:%M:%SZ"
+          python src/ingestion/poll.py
+          date -u +"UTC end: %Y-%m-%dT%H:%M:%SZ"
 
       - name: Commit updated DB
         run: |
