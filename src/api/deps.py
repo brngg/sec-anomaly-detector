@@ -4,8 +4,6 @@ Provides `get_db` dependency that yields a DB connection with foreign keys enabl
 """
 from typing import Generator
 
-from fastapi import Depends
-
 from ..db.db_utils import get_conn
 
 
