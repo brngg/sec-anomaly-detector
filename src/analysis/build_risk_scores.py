@@ -6,13 +6,17 @@ import argparse
 import json
 import math
 import sys
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+if __package__ in {None, ""}:
+    # Fallback for `python src/analysis/build_risk_scores.py`.
+    repo_root = Path(__file__).resolve().parents[2]
+    if str(repo_root) not in sys.path:
+        sys.path.insert(0, str(repo_root))
 
-from src.db import db_utils
+from src.db import db_utils  # noqa: E402
 
 LOOKBACK_WINDOWS = (30, 90)
 WINDOW_WEIGHTS = {30: 0.65, 90: 0.35}
@@ -51,6 +55,15 @@ def _parse_created_at(value: str) -> datetime:
         text = text[:-1] + "+00:00"
     dt = datetime.fromisoformat(text)
     return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+def _validate_severity(value: Any) -> float:
+    severity = float(value)
+    if math.isnan(severity):
+        raise ValueError("severity_score cannot be NaN")
+    if not 0.0 <= severity <= 1.0:
+        raise ValueError(f"severity_score out of expected range [0,1]: {severity}")
+    return severity
 
 
 def _recency_weight(age_days: float) -> float:
@@ -112,52 +125,60 @@ def _score_from_components(components: Mapping[str, float]) -> float:
     return weighted_sum / weight_total
 
 
-def _build_window_features(
+def _build_features_for_all_windows(
     ciks: Iterable[int],
     alert_rows: Iterable[Mapping[str, Any]],
     as_of_date: str,
-    lookback_days: int,
-) -> dict[int, dict[str, float | int]]:
-    feature_map: dict[int, dict[str, float | int]] = {cik: _empty_feature_row() for cik in ciks}
-    as_of_cutoff = datetime.fromisoformat(as_of_date).replace(tzinfo=timezone.utc) + timedelta(days=1)
+    lookback_windows: Iterable[int],
+) -> dict[int, dict[int, dict[str, float | int]]]:
+    sorted_windows = sorted(set(int(days) for days in lookback_windows))
+    feature_maps: dict[int, dict[int, dict[str, float | int]]] = {
+        window: {cik: _empty_feature_row() for cik in ciks}
+        for window in sorted_windows
+    }
+    as_of_day = date.fromisoformat(as_of_date)
 
     for row in alert_rows:
         cik = int(row["cik"])
-        if cik not in feature_map:
+        if not sorted_windows or cik not in feature_maps[sorted_windows[0]]:
             continue
 
         created_at = _parse_created_at(str(row["created_at"]))
-        age_days = (as_of_cutoff - created_at).total_seconds() / 86400.0
-        if age_days < 0 or age_days > lookback_days:
+        # Day-level aging avoids intra-day bias for events on the same calendar date.
+        age_days = (as_of_day - created_at.date()).days
+        if age_days < 0:
             continue
-
-        features = feature_map[cik]
-        features["total_alerts"] = int(features["total_alerts"]) + 1
 
         anomaly_type = str(row["anomaly_type"])
         prefix = ANOMALY_PREFIX.get(anomaly_type)
         if prefix is None:
             continue
 
-        severity = float(row["severity_score"])
+        severity = _validate_severity(row["severity_score"])
         recency = _recency_weight(age_days)
-        features[f"{prefix}_count"] = int(features[f"{prefix}_count"]) + 1
-        features[f"{prefix}_weighted_severity"] = float(features[f"{prefix}_weighted_severity"]) + (
-            severity * recency
-        )
+        for lookback_days in sorted_windows:
+            if age_days > lookback_days:
+                continue
+            features = feature_maps[lookback_days][cik]
+            features["total_alerts"] = int(features["total_alerts"]) + 1
+            features[f"{prefix}_count"] = int(features[f"{prefix}_count"]) + 1
+            features[f"{prefix}_weighted_severity"] = float(features[f"{prefix}_weighted_severity"]) + (
+                severity * recency
+            )
 
-    for cik, features in feature_map.items():
-        components: dict[str, float] = {}
-        for anomaly_type, prefix in ANOMALY_PREFIX.items():
-            weighted = float(features[f"{prefix}_weighted_severity"])
-            scale = ANOMALY_COMPONENT_SCALES[anomaly_type]
-            component = min(weighted / scale, 1.0)
-            features[f"{prefix}_component"] = component
-            components[anomaly_type] = component
-        features["window_score"] = _score_from_components(components)
-        feature_map[cik] = features
+    for lookback_days in sorted_windows:
+        for cik, features in feature_maps[lookback_days].items():
+            components: dict[str, float] = {}
+            for anomaly_type, prefix in ANOMALY_PREFIX.items():
+                weighted = float(features[f"{prefix}_weighted_severity"])
+                scale = ANOMALY_COMPONENT_SCALES[anomaly_type]
+                component = min(weighted / scale, 1.0)
+                features[f"{prefix}_component"] = component
+                components[anomaly_type] = component
+            features["window_score"] = _score_from_components(components)
+            feature_maps[lookback_days][cik] = features
 
-    return feature_map
+    return feature_maps
 
 
 def _combine_window_scores(window_scores: Mapping[int, float]) -> float:
@@ -194,13 +215,33 @@ def _build_top_signals(features: Mapping[str, float | int]) -> list[dict[str, fl
     return signals
 
 
+def _compute_dense_rank_percentile_map(scores: Iterable[float]) -> dict[float, tuple[int, float]]:
+    unique_scores = sorted(set(float(score) for score in scores), reverse=True)
+    if not unique_scores:
+        return {}
+
+    result: dict[float, tuple[int, float]] = {}
+    if len(unique_scores) == 1:
+        only = unique_scores[0]
+        result[only] = (1, 1.0)
+        return result
+
+    for index, score in enumerate(unique_scores, start=1):
+        percentile = 1.0 - ((index - 1) / (len(unique_scores) - 1))
+        result[score] = (index, percentile)
+    return result
+
+
 def run_risk_scoring(
     path: Path = db_utils.DB_PATH,
     as_of_date: str | None = None,
 ) -> dict[str, int | str]:
     """Compute and persist issuer-level risk scores from alert history."""
     normalized_date = _normalize_as_of_date(as_of_date)
-    max_lookback_days = max(LOOKBACK_WINDOWS)
+    lookback_windows = tuple(sorted(set(int(days) for days in LOOKBACK_WINDOWS)))
+    max_lookback_days = max(lookback_windows)
+    short_window = min(lookback_windows)
+    long_window = max(lookback_windows)
 
     with db_utils.get_conn(path=path) as conn:
         ciks = _fetch_tracked_ciks(conn)
@@ -214,20 +255,17 @@ def run_risk_scoring(
             }
 
         alert_rows = _fetch_alert_rows(conn, normalized_date, max_lookback_days)
-        window_features: dict[int, dict[int, dict[str, float | int]]] = {}
+        window_features: dict[int, dict[int, dict[str, float | int]]] = _build_features_for_all_windows(
+            ciks=ciks,
+            alert_rows=alert_rows,
+            as_of_date=normalized_date,
+            lookback_windows=lookback_windows,
+        )
         snapshots_upserted = 0
 
-        for lookback_days in LOOKBACK_WINDOWS:
-            features_by_cik = _build_window_features(
-                ciks=ciks,
-                alert_rows=alert_rows,
-                as_of_date=normalized_date,
-                lookback_days=lookback_days,
-            )
-            window_features[lookback_days] = features_by_cik
-
+        for lookback_days in lookback_windows:
             for cik in ciks:
-                features = features_by_cik[cik]
+                features = window_features[lookback_days][cik]
                 db_utils.upsert_feature_snapshot(
                     conn=conn,
                     cik=cik,
@@ -242,33 +280,33 @@ def run_risk_scoring(
         for cik in ciks:
             per_window = {
                 lookback_days: float(window_features[lookback_days][cik]["window_score"])
-                for lookback_days in LOOKBACK_WINDOWS
+                for lookback_days in lookback_windows
             }
             score_by_cik[cik] = _combine_window_scores(per_window)
 
-        sorted_scores = sorted(score_by_cik.items(), key=lambda item: (item[1], -item[0]), reverse=True)
-        issuers_count = len(sorted_scores)
+        # Deterministic output order while preserving identical ranks for identical scores.
+        sorted_scores = sorted(score_by_cik.items(), key=lambda item: (-item[1], item[0]))
+        rank_map = _compute_dense_rank_percentile_map(score_by_cik.values())
+        issuers_count = len(ciks)
         scores_upserted = 0
 
-        for rank, (cik, final_score) in enumerate(sorted_scores, start=1):
-            if issuers_count == 1:
-                percentile = 1.0
-            else:
-                percentile = 1.0 - ((rank - 1) / (issuers_count - 1))
-
+        for cik, final_score in sorted_scores:
+            rank, percentile = rank_map[float(final_score)]
             window_score_map = {
                 str(lookback_days): float(window_features[lookback_days][cik]["window_score"])
-                for lookback_days in LOOKBACK_WINDOWS
+                for lookback_days in lookback_windows
             }
+            top_signals_key = f"top_signals_{short_window}d"
+            source_alerts_key = f"source_alerts_{long_window}d"
             evidence = {
                 "model_version": MODEL_VERSION,
                 "as_of_date": normalized_date,
                 "window_weights": WINDOW_WEIGHTS,
                 "anomaly_weights": ANOMALY_TYPE_WEIGHTS,
                 "window_scores": window_score_map,
-                "top_signals_30d": _build_top_signals(window_features[30][cik]),
-                "lookback_windows_days": list(LOOKBACK_WINDOWS),
-                "source_alerts_90d": int(window_features[90][cik]["total_alerts"]),
+                top_signals_key: _build_top_signals(window_features[short_window][cik]),
+                "lookback_windows_days": list(lookback_windows),
+                source_alerts_key: int(window_features[long_window][cik]["total_alerts"]),
             }
 
             db_utils.upsert_issuer_risk_score(

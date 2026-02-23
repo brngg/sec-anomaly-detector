@@ -2,7 +2,7 @@
 
 from fastapi import FastAPI
 
-from .routes import alerts_router, companies_router, filings_router, health_router
+from .routes import alerts_router, companies_router, filings_router, health_router, risk_router
 
 
 def create_app() -> FastAPI:
@@ -16,6 +16,7 @@ def create_app() -> FastAPI:
     app.include_router(companies_router)
     app.include_router(filings_router)
     app.include_router(alerts_router)
+    app.include_router(risk_router)
 
     return app
 

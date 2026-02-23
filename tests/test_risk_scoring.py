@@ -2,9 +2,11 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from src.analysis.build_risk_scores import MODEL_VERSION, run_risk_scoring
+from src.analysis.build_risk_scores import LOOKBACK_WINDOWS, MODEL_VERSION, run_risk_scoring
 from src.db.db_utils import get_conn, insert_filing, upsert_company
 from src.db.init_db import create_db
 
@@ -135,4 +137,65 @@ def test_run_risk_scoring_builds_ranked_scores(tmp_path: Path) -> None:
     evidence = json.loads(score_rows[0]["evidence"])
     assert evidence["model_version"] == MODEL_VERSION
     assert "window_scores" in evidence
-    assert "top_signals_30d" in evidence
+    assert f"top_signals_{min(LOOKBACK_WINDOWS)}d" in evidence
+
+
+def test_equal_scores_share_rank_and_percentile(tmp_path: Path) -> None:
+    db_path = tmp_path / "test.db"
+    create_db(path=db_path, reset=False)
+
+    with get_conn(path=db_path) as conn:
+        upsert_company(conn, cik=2001, name="No Signal A", ticker="NSA", industry="Tech")
+        upsert_company(conn, cik=2002, name="No Signal B", ticker="NSB", industry="Tech")
+        upsert_company(conn, cik=2003, name="Signal Co", ticker="SIG", industry="Tech")
+
+        insert_filing(conn, "acc-2003-a", 2003, "8-K", "2026-02-22T10:00:00", "2026-02-22")
+        _insert_alert(
+            conn,
+            accession_id="acc-2003-a",
+            anomaly_type="NT_FILING",
+            severity_score=0.90,
+            created_at="2026-02-22 10:00:00",
+            dedupe_key="test:2003:nt",
+        )
+
+    run_risk_scoring(path=db_path, as_of_date="2026-02-23")
+
+    with get_conn(path=db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT cik, risk_score, risk_rank, percentile
+            FROM issuer_risk_scores
+            WHERE as_of_date = '2026-02-23' AND model_version = ?
+            ORDER BY cik
+            """,
+            (MODEL_VERSION,),
+        ).fetchall()
+
+    assert len(rows) == 3
+    no_signal_rows = [row for row in rows if row["cik"] in {2001, 2002}]
+    assert len(no_signal_rows) == 2
+    assert no_signal_rows[0]["risk_score"] == 0.0
+    assert no_signal_rows[1]["risk_score"] == 0.0
+    assert no_signal_rows[0]["risk_rank"] == no_signal_rows[1]["risk_rank"]
+    assert no_signal_rows[0]["percentile"] == no_signal_rows[1]["percentile"]
+
+
+def test_out_of_range_severity_raises(tmp_path: Path) -> None:
+    db_path = tmp_path / "test.db"
+    create_db(path=db_path, reset=False)
+
+    with get_conn(path=db_path) as conn:
+        upsert_company(conn, cik=3001, name="Bad Severity", ticker="BAD", industry="Tech")
+        insert_filing(conn, "acc-3001-a", 3001, "8-K", "2026-02-22T10:00:00", "2026-02-22")
+        _insert_alert(
+            conn,
+            accession_id="acc-3001-a",
+            anomaly_type="NT_FILING",
+            severity_score=42.0,
+            created_at="2026-02-22 10:00:00",
+            dedupe_key="test:3001:nt",
+        )
+
+    with pytest.raises(ValueError, match="severity_score out of expected range"):
+        run_risk_scoring(path=db_path, as_of_date="2026-02-23")

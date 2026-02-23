@@ -98,6 +98,11 @@ Optional as-of date:
 python src/analysis/build_risk_scores.py --as-of-date 2026-02-23
 ```
 
+## Risk API Endpoints
+- `GET /risk/top` - ranked issuer risk scores (latest date by default)
+- `GET /risk/{cik}/history` - historical risk scores for one issuer
+- `GET /risk/{cik}/explain` - latest or date-specific evidence payload for one issuer
+
 ## Notebooks
 - `notebooks/01_signal_qc.ipynb` - signal quality checks and exploratory analysis
 - `notebooks/02_risk_backtest.ipynb` - validation and backtesting workflow
