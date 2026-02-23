@@ -1,3 +1,3 @@
-"""SEC anomaly detector package."""
+"""SEC disclosure-risk monitor package."""
 
 __all__ = []

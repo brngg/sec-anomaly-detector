@@ -7,9 +7,9 @@ from .routes import alerts_router, companies_router, filings_router, health_rout
 
 def create_app() -> FastAPI:
     app = FastAPI(
-        title="SEC Filing Anomaly Detector API",
+        title="SEC Disclosure-Risk Monitor API",
         version="0.1.0",
-        description="API for querying SEC filing anomalies and related data.",
+        description="API for querying SEC filing risk signals and related data.",
     )
 
     app.include_router(health_router)
