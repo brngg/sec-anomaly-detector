@@ -87,6 +87,17 @@ python src/detection/spike_8k_detection.py
 python src/detection/run_all.py
 ```
 
+## Risk Scoring
+Build issuer-level disclosure-risk scores from existing alerts:
+```bash
+python src/analysis/build_risk_scores.py
+```
+
+Optional as-of date:
+```bash
+python src/analysis/build_risk_scores.py --as-of-date 2026-02-23
+```
+
 ## Notebooks
 - `notebooks/01_signal_qc.ipynb` - signal quality checks and exploratory analysis
 - `notebooks/02_risk_backtest.ipynb` - validation and backtesting workflow
