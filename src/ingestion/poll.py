@@ -4,11 +4,16 @@ import time
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+if __package__ in {None, ""}:
+    repo_root = Path(__file__).resolve().parents[2]
+    if str(repo_root) not in sys.path:
+        sys.path.insert(0, str(repo_root))
 
 from edgar import Company, iter_current_filings_pages, set_identity
 from dotenv import load_dotenv
+from filelock import FileLock, Timeout as FileLockTimeout
 
+from src.analysis.build_risk_scores import run_risk_scoring
 from src.db import db_utils
 from src.detection.run_all import run_all_detections
 
@@ -33,16 +38,23 @@ STALE_RUN_THRESHOLD_PCT = float(os.getenv("POLL_STALE_RUN_THRESHOLD_PCT", "0.8")
 CURRENT_PAGE_SIZE = int(os.getenv("POLL_CURRENT_PAGE_SIZE", "100"))
 FEED_BUFFER_HOURS = int(os.getenv("POLL_FEED_BUFFER_HOURS", "6"))
 SLEEP_SECONDS = float(os.getenv("POLL_SLEEP_SECONDS", "0.11"))
+LOCK_TIMEOUT_SECONDS = float(os.getenv("POLL_LOCK_TIMEOUT_SECONDS", "0"))
+LOCK_PATH = Path(os.getenv("POLL_LOCK_PATH", str(REPO_ROOT / ".poller.lock")))
 
 
 def _parse_bool(value: str) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "y"}
 
 
+def _is_disabled(value: str) -> bool:
+    return value.strip().lower() in {"0", "false", "no", "n"}
+
+
 def _stringify_dt(value) -> str:
     if hasattr(value, "isoformat"):
         return value.isoformat()
     return str(value)
+
 
 def _parse_dt(value: str) -> datetime | None:
     if not value:
@@ -239,6 +251,9 @@ def _scan_current_feed(
                         last_run_status="FAIL",
                         last_error=str(e),
                     )
+        if not dry_run:
+            # Persist progress incrementally so long runs don't lose all ingestion work.
+            db_conn.commit()
 
         if break_after:
             break
@@ -265,6 +280,7 @@ def _apply_feed_watermarks(
             last_run_status="SUCCESS",
             last_error=None,
         )
+    db_conn.commit()
 
 
 def _run_catchup(
@@ -359,6 +375,7 @@ def _run_catchup(
                     last_run_status="SUCCESS",
                     last_error=None,
                 )
+                db_conn.commit()
         except Exception as e:
             stats["total_errors"] += 1
             if not dry_run:
@@ -370,6 +387,7 @@ def _run_catchup(
                     last_run_status="FAIL",
                     last_error=str(e),
                 )
+                db_conn.commit()
             print(f"Error processing {label}: {e}")
         finally:
             company_duration = time.perf_counter() - company_start
@@ -380,12 +398,19 @@ def _run_catchup(
             time.sleep(SLEEP_SECONDS)
 
     catchup_duration = time.perf_counter() - catchup_start
-    _set_poll_state(db_conn, "last_catchup_at", now_utc.isoformat())
+    if not dry_run:
+        _set_poll_state(db_conn, "last_catchup_at", now_utc.isoformat())
+        db_conn.commit()
     return False, catchup_duration
 
 
 def main() -> int:
     load_dotenv(REPO_ROOT / ".env", override=True)
+
+    lock_path = Path(os.getenv("POLL_LOCK_PATH", str(LOCK_PATH)))
+    lock_timeout_seconds = float(os.getenv("POLL_LOCK_TIMEOUT_SECONDS", str(LOCK_TIMEOUT_SECONDS)))
+    enable_inline_analysis = not _is_disabled(os.getenv("POLL_ENABLE_INLINE_ANALYSIS", "1"))
+    enable_risk_scoring = not _is_disabled(os.getenv("POLL_ENABLE_RISK_SCORING", "1"))
 
     sec_identity = os.getenv("SEC_IDENTITY", "").strip()
     if not sec_identity:
@@ -396,116 +421,148 @@ def main() -> int:
 
     dry_run = _parse_bool(os.getenv("DRY_RUN", ""))
 
-    start_time = datetime.now()
-    overall_start = time.perf_counter()
-    now_utc = datetime.now(timezone.utc)
-    print(f"Starting poll at {start_time.isoformat()}")
+    lock = FileLock(str(lock_path))
+    try:
+        lock.acquire(timeout=max(0.0, lock_timeout_seconds))
+    except FileLockTimeout:
+        print(f"Another poller instance is already running (lock={lock_path}). Exiting.")
+        return 0
 
-    stats = {
-        "total_seen": 0,
-        "total_inserted": 0,
-        "total_errors": 0,
-        "feed_seen": 0,
-        "feed_matched": 0,
-        "feed_inserted": 0,
-        "feed_pages": 0,
-        "catchup_companies": 0,
-        "catchup_seen": 0,
-        "catchup_inserted": 0,
-    }
-
-    with db_utils.get_conn() as db_conn:
-        _ensure_poll_state(db_conn)
-        rows = db_conn.execute(
-            """
-            SELECT c.cik, c.ticker, w.last_seen_filed_at, w.last_run_at
-            FROM companies c
-            LEFT JOIN watermarks w ON w.cik = c.cik
-            ORDER BY c.cik
-            """
-        ).fetchall()
-
-        if not rows:
-            print("No tracked companies found in DB. Exiting.")
-            return 1
-
-        _set_poll_state(db_conn, "last_poll_at", now_utc.isoformat())
-
-        print(f"Tracked companies: {len(rows)}")
-
-        tracked_ciks = {int(row["cik"]) for row in rows}
-        last_seen_map = {int(row["cik"]): row["last_seen_filed_at"] for row in rows}
-        last_run_map = {int(row["cik"]): row["last_run_at"] for row in rows}
-        _warn_if_stale_runs(tracked_ciks, last_run_map, now_utc)
-
-        # Fast path: current filings feed (last ~24 hours) with pagination
-        page_size = CURRENT_PAGE_SIZE if CURRENT_PAGE_SIZE in {10, 20, 40, 80, 100} else 100
-
+    try:
+        start_time = datetime.now()
+        overall_start = time.perf_counter()
         now_utc = datetime.now(timezone.utc)
-        feed_cutoff = _compute_feed_cutoff(last_seen_map, now_utc)
+        print(f"Starting poll at {start_time.isoformat()}")
 
-        print("Scanning current feed...")
-        max_seen_by_cik, feed_duration = _scan_current_feed(
-            db_conn,
-            tracked_ciks,
-            last_seen_map,
-            page_size,
-            feed_cutoff,
-            dry_run,
-            stats,
-        )
-        print(f"Finished feed scan in {feed_duration:.2f}s")
+        stats = {
+            "total_seen": 0,
+            "total_inserted": 0,
+            "total_errors": 0,
+            "feed_seen": 0,
+            "feed_matched": 0,
+            "feed_inserted": 0,
+            "feed_pages": 0,
+            "catchup_companies": 0,
+            "catchup_seen": 0,
+            "catchup_inserted": 0,
+        }
 
-        _apply_feed_watermarks(db_conn, last_seen_map, max_seen_by_cik, dry_run)
+        with db_utils.get_conn() as db_conn:
+            _ensure_poll_state(db_conn)
+            rows = db_conn.execute(
+                """
+                SELECT c.cik, c.ticker, w.last_seen_filed_at, w.last_run_at
+                FROM companies c
+                LEFT JOIN watermarks w ON w.cik = c.cik
+                ORDER BY c.cik
+                """
+            ).fetchall()
 
-        # Catch-up path: only for stale/missing watermarks
-        catchup_skipped, catchup_duration = _run_catchup(
-            db_conn,
-            rows,
-            last_seen_map,
-            dry_run,
-            now_utc,
-            stats,
-        )
+            if not rows:
+                print("No tracked companies found in DB. Exiting.")
+                return 1
 
-    end_time = datetime.now()
-    overall_duration = time.perf_counter() - overall_start
-    elapsed = (end_time - start_time).total_seconds()
-    print(f"Completed at {end_time.isoformat()} (elapsed {elapsed:.2f}s)")
-    if stats["catchup_companies"] > 0:
-        print(
-            "Summary: "
-            f"seen={stats['total_seen']} inserted={stats['total_inserted']} errors={stats['total_errors']}"
-        )
-        print(
-            "Feed summary: "
-            f"seen={stats['feed_seen']} matched={stats['feed_matched']} inserted={stats['feed_inserted']}"
-        )
-        print(f"Feed pages scanned: {stats['feed_pages']} | duration={feed_duration:.2f}s")
-        print(
-            "Catch-up summary: "
-            f"companies={stats['catchup_companies']} seen={stats['catchup_seen']} inserted={stats['catchup_inserted']}"
-        )
-        print(f"Catch-up duration: {catchup_duration:.2f}s")
-        print(f"Total runtime: {overall_duration:.2f}s")
-    else:
-        print(
-            "Summary: "
-            f"feed_seen={stats['feed_seen']} matched={stats['feed_matched']} "
-            f"inserted={stats['feed_inserted']} errors={stats['total_errors']} "
-            f"runtime={overall_duration:.2f}s"
-        )
-        print(f"Feed pages scanned: {stats['feed_pages']} | duration={feed_duration:.2f}s")
-        if ENABLE_CATCHUP and catchup_skipped:
-            print(f"Catch-up cooldown: {CATCHUP_COOLDOWN_HOURS}h (skipped)")
+            _set_poll_state(db_conn, "last_poll_at", now_utc.isoformat())
 
-    if not dry_run and stats["total_inserted"] > 0:
-        print("New filings inserted; running detectors...")
-        run_all_detections()
-    else:
-        print("No new filings inserted; skipping detectors.")
+            print(f"Tracked companies: {len(rows)}")
 
-    return 0 if stats["total_errors"] == 0 else 1
+            tracked_ciks = {int(row["cik"]) for row in rows}
+            last_seen_map = {int(row["cik"]): row["last_seen_filed_at"] for row in rows}
+            last_run_map = {int(row["cik"]): row["last_run_at"] for row in rows}
+            _warn_if_stale_runs(tracked_ciks, last_run_map, now_utc)
+
+            # Fast path: current filings feed (last ~24 hours) with pagination
+            page_size = CURRENT_PAGE_SIZE if CURRENT_PAGE_SIZE in {10, 20, 40, 80, 100} else 100
+
+            now_utc = datetime.now(timezone.utc)
+            feed_cutoff = _compute_feed_cutoff(last_seen_map, now_utc)
+
+            print("Scanning current feed...")
+            max_seen_by_cik, feed_duration = _scan_current_feed(
+                db_conn,
+                tracked_ciks,
+                last_seen_map,
+                page_size,
+                feed_cutoff,
+                dry_run,
+                stats,
+            )
+            print(f"Finished feed scan in {feed_duration:.2f}s")
+
+            _apply_feed_watermarks(db_conn, last_seen_map, max_seen_by_cik, dry_run)
+
+            # Catch-up path: only for stale/missing watermarks
+            catchup_skipped, catchup_duration = _run_catchup(
+                db_conn,
+                rows,
+                last_seen_map,
+                dry_run,
+                now_utc,
+                stats,
+            )
+
+        end_time = datetime.now()
+        overall_duration = time.perf_counter() - overall_start
+        elapsed = (end_time - start_time).total_seconds()
+        print(f"Completed at {end_time.isoformat()} (elapsed {elapsed:.2f}s)")
+        if ENABLE_CATCHUP and (stats["catchup_companies"] > 0 or catchup_skipped):
+            print(
+                "Summary: "
+                f"seen={stats['total_seen']} inserted={stats['total_inserted']} errors={stats['total_errors']}"
+            )
+            print(
+                "Feed summary: "
+                f"seen={stats['feed_seen']} matched={stats['feed_matched']} inserted={stats['feed_inserted']}"
+            )
+            print(f"Feed pages scanned: {stats['feed_pages']} | duration={feed_duration:.2f}s")
+            print(
+                "Catch-up summary: "
+                f"companies={stats['catchup_companies']} seen={stats['catchup_seen']} inserted={stats['catchup_inserted']}"
+            )
+            if catchup_skipped:
+                print(f"Catch-up cooldown: {CATCHUP_COOLDOWN_HOURS}h (skipped)")
+            elif stats["catchup_companies"] > 0:
+                print(f"Catch-up duration: {catchup_duration:.2f}s")
+            print(f"Total runtime: {overall_duration:.2f}s")
+        else:
+            print(
+                "Summary: "
+                f"feed_seen={stats['feed_seen']} matched={stats['feed_matched']} "
+                f"inserted={stats['feed_inserted']} errors={stats['total_errors']} "
+                f"runtime={overall_duration:.2f}s"
+            )
+            print(f"Feed pages scanned: {stats['feed_pages']} | duration={feed_duration:.2f}s")
+
+        if not dry_run and stats["total_inserted"] > 0:
+            if not enable_inline_analysis:
+                print("New filings inserted; inline analysis disabled by POLL_ENABLE_INLINE_ANALYSIS.")
+            else:
+                print("New filings inserted; running detectors...")
+                run_all_detections()
+
+                if enable_risk_scoring:
+                    print("Running issuer risk scoring...")
+                    try:
+                        score_stats = run_risk_scoring()
+                        print(
+                            "Risk scoring summary: "
+                            f"issuers_scored={score_stats['issuers_scored']} "
+                            f"snapshots_upserted={score_stats['snapshots_upserted']} "
+                            f"scores_upserted={score_stats['scores_upserted']} "
+                            f"source_alerts={score_stats['source_alerts']} "
+                            f"as_of_date={score_stats['as_of_date']}"
+                        )
+                    except Exception as e:
+                        print(f"Risk scoring failed: {e}")
+                else:
+                    print("Risk scoring disabled by POLL_ENABLE_RISK_SCORING.")
+        else:
+            print("No new filings inserted; skipping detectors and risk scoring.")
+
+        return 0 if stats["total_errors"] == 0 else 1
+    finally:
+        if lock.is_locked:
+            lock.release()
 
 
 if __name__ == "__main__":
