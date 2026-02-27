@@ -4,6 +4,8 @@ import time
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
+import httpx
+
 if __package__ in {None, ""}:
     repo_root = Path(__file__).resolve().parents[2]
     if str(repo_root) not in sys.path:
@@ -40,6 +42,19 @@ FEED_BUFFER_HOURS = int(os.getenv("POLL_FEED_BUFFER_HOURS", "6"))
 SLEEP_SECONDS = float(os.getenv("POLL_SLEEP_SECONDS", "0.11"))
 LOCK_TIMEOUT_SECONDS = float(os.getenv("POLL_LOCK_TIMEOUT_SECONDS", "0"))
 LOCK_PATH = Path(os.getenv("POLL_LOCK_PATH", str(REPO_ROOT / ".poller.lock")))
+
+try:
+    from httpcore import ConnectTimeout as HTTPCoreConnectTimeout
+    from httpcore import ReadTimeout as HTTPCoreReadTimeout
+
+    NETWORK_TIMEOUT_ERRORS = (
+        httpx.ReadTimeout,
+        httpx.ConnectTimeout,
+        HTTPCoreReadTimeout,
+        HTTPCoreConnectTimeout,
+    )
+except Exception:
+    NETWORK_TIMEOUT_ERRORS = (httpx.ReadTimeout, httpx.ConnectTimeout)
 
 
 def _parse_bool(value: str) -> bool:
@@ -186,77 +201,84 @@ def _scan_current_feed(
 ) -> tuple[dict[int, str | None], float]:
     max_seen_by_cik: dict[int, str | None] = {}
     feed_start = time.perf_counter()
-    for page in iter_current_filings_pages(page_size=page_size):
-        stats["feed_pages"] += 1
-        page_entries = page.data.to_pylist()
-        if not page_entries:
-            continue
-
-        break_after = False
-        if feed_cutoff:
-            oldest_dt = _coerce_dt(page_entries[-1].get("accepted")) or _coerce_dt(
-                page_entries[-1].get("filing_date")
-            )
-            if oldest_dt and oldest_dt < feed_cutoff:
-                break_after = True
-
-        for entry in page_entries:
-            if entry.get("form") not in FORM_TYPES_SET:
-                continue
-            stats["feed_seen"] += 1
-            stats["total_seen"] += 1
-            try:
-                filing_cik = int(entry.get("cik"))
-            except Exception:
+    try:
+        for page in iter_current_filings_pages(page_size=page_size):
+            stats["feed_pages"] += 1
+            page_entries = page.data.to_pylist()
+            if not page_entries:
                 continue
 
-            if filing_cik not in tracked_ciks:
-                continue
-
-            stats["feed_matched"] += 1
-            filed_at = entry.get("accepted") or entry.get("filing_date")
-            filed_at_str = _stringify_dt(filed_at)
-            filed_date_str = _stringify_dt(entry.get("filing_date"))
-            max_seen_by_cik[filing_cik] = _resolve_last_seen(
-                max_seen_by_cik.get(filing_cik), filed_at_str
-            )
-
-            if dry_run:
-                stats["feed_inserted"] += 1
-                stats["total_inserted"] += 1
-                continue
-
-            try:
-                changes_before_insert = db_conn.total_changes
-                db_utils.insert_filing(
-                    db_conn,
-                    entry.get("accession_number"),
-                    filing_cik,
-                    entry.get("form"),
-                    filed_at_str,
-                    filed_date_str,
-                    None,
+            break_after = False
+            if feed_cutoff:
+                oldest_dt = _coerce_dt(page_entries[-1].get("accepted")) or _coerce_dt(
+                    page_entries[-1].get("filing_date")
                 )
-                if db_conn.total_changes > changes_before_insert:
+                if oldest_dt and oldest_dt < feed_cutoff:
+                    break_after = True
+
+            for entry in page_entries:
+                if entry.get("form") not in FORM_TYPES_SET:
+                    continue
+                stats["feed_seen"] += 1
+                stats["total_seen"] += 1
+                try:
+                    filing_cik = int(entry.get("cik"))
+                except Exception:
+                    continue
+
+                if filing_cik not in tracked_ciks:
+                    continue
+
+                stats["feed_matched"] += 1
+                filed_at = entry.get("accepted") or entry.get("filing_date")
+                filed_at_str = _stringify_dt(filed_at)
+                filed_date_str = _stringify_dt(entry.get("filing_date"))
+                max_seen_by_cik[filing_cik] = _resolve_last_seen(
+                    max_seen_by_cik.get(filing_cik), filed_at_str
+                )
+
+                if dry_run:
                     stats["feed_inserted"] += 1
                     stats["total_inserted"] += 1
-            except Exception as e:
-                stats["total_errors"] += 1
-                if not dry_run:
-                    db_utils.update_watermark(
-                        db_conn,
-                        cik=filing_cik,
-                        last_seen_filed_at=last_seen_map.get(filing_cik),
-                        last_run_at=datetime.now().isoformat(),
-                        last_run_status="FAIL",
-                        last_error=str(e),
-                    )
-        if not dry_run:
-            # Persist progress incrementally so long runs don't lose all ingestion work.
-            db_conn.commit()
+                    continue
 
-        if break_after:
-            break
+                try:
+                    changes_before_insert = db_conn.total_changes
+                    db_utils.insert_filing(
+                        db_conn,
+                        entry.get("accession_number"),
+                        filing_cik,
+                        entry.get("form"),
+                        filed_at_str,
+                        filed_date_str,
+                        None,
+                    )
+                    if db_conn.total_changes > changes_before_insert:
+                        stats["feed_inserted"] += 1
+                        stats["total_inserted"] += 1
+                except Exception as e:
+                    stats["total_errors"] += 1
+                    if not dry_run:
+                        db_utils.update_watermark(
+                            db_conn,
+                            cik=filing_cik,
+                            last_seen_filed_at=last_seen_map.get(filing_cik),
+                            last_run_at=datetime.now().isoformat(),
+                            last_run_status="FAIL",
+                            last_error=str(e),
+                        )
+            if not dry_run:
+                # Persist progress incrementally so long runs don't lose all ingestion work.
+                db_conn.commit()
+
+            if break_after:
+                break
+    except NETWORK_TIMEOUT_ERRORS as e:
+        stats["total_errors"] += 1
+        print(
+            "Warning: current feed scan timed out while fetching SEC pages. "
+            f"Continuing with partial feed results. Error: {e}"
+        )
     feed_duration = time.perf_counter() - feed_start
     return max_seen_by_cik, feed_duration
 
