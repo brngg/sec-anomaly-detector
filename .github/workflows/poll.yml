@@ -1,19 +1,20 @@
-name: SEC Poller
+name: SEC Daily Demo Refresh
 
 on:
   schedule:
-    - cron: "*/15 * * * *"
+    # 14:00 UTC is morning in US time zones.
+    - cron: "0 14 * * *"
   workflow_dispatch:
 
 concurrency:
-  group: sec-poll
+  group: sec-daily-refresh
   cancel-in-progress: true
 
 permissions:
   contents: write
 
 jobs:
-  poll:
+  daily-refresh:
     runs-on: ubuntu-latest
 
     steps:
@@ -28,7 +29,7 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Run poller
+      - name: Run ingestion poller
         env:
           SEC_IDENTITY: ${{ secrets.SEC_IDENTITY }}
           POLL_ENABLE_CATCHUP: "1"
@@ -37,10 +38,39 @@ jobs:
           POLL_CURRENT_PAGE_SIZE: "100"
           POLL_FEED_BUFFER_HOURS: "6"
           POLL_LOOKBACK_DAYS: "14"
+          POLL_ENABLE_INLINE_ANALYSIS: "0"
         run: |
-          date -u +"UTC start: %Y-%m-%dT%H:%M:%SZ"
+          date -u +"Ingestion UTC start: %Y-%m-%dT%H:%M:%SZ"
           python src/ingestion/poll.py
-          date -u +"UTC end: %Y-%m-%dT%H:%M:%SZ"
+          date -u +"Ingestion UTC end: %Y-%m-%dT%H:%M:%SZ"
+
+      - name: Run analysis (detectors + risk scoring)
+        env:
+          POLL_ENABLE_RISK_SCORING: "1"
+        run: |
+          date -u +"Analysis UTC start: %Y-%m-%dT%H:%M:%SZ"
+          python src/analysis/run_analysis.py
+          date -u +"Analysis UTC end: %Y-%m-%dT%H:%M:%SZ"
+
+      - name: Quality gate (risk scores must exist)
+        run: |
+          python - <<'PY'
+          import sqlite3
+          import sys
+
+          try:
+              conn = sqlite3.connect("data/sec_anomaly.db")
+              count = conn.execute("SELECT COUNT(*) FROM issuer_risk_scores").fetchone()[0]
+              conn.close()
+          except sqlite3.Error as exc:
+              print(f"ERROR: failed to query issuer_risk_scores: {exc}", file=sys.stderr)
+              sys.exit(1)
+
+          print(f"issuer_risk_scores rows: {count}")
+          if count <= 0:
+              print("ERROR: issuer_risk_scores is empty after analysis.", file=sys.stderr)
+              sys.exit(1)
+          PY
 
       - name: Commit updated DB
         run: |
@@ -51,5 +81,5 @@ jobs:
           git config user.name "sec-poller"
           git config user.email "sec-poller@users.noreply.github.com"
           git add data/sec_anomaly.db
-          git commit -m "Update SEC poll DB"
+          git commit -m "Update SEC demo DB snapshot"
           git push

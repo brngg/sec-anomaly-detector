@@ -71,7 +71,13 @@ python src/ingestion/backfill.py
 ```
 
 ## Polling
-GitHub Actions runs the poller every 15 minutes and commits DB updates to `data/sec_anomaly.db`.
+GitHub Actions runs a daily full refresh pipeline (ingestion + analysis) and commits DB updates to
+`data/sec_anomaly.db`.
+
+Workflow:
+- `.github/workflows/poll.yml`
+- Schedule: daily at `14:00 UTC` (morning US time zones)
+- Also supports manual refresh via `workflow_dispatch` (recommended before interview demos)
 
 Run locally:
 ```bash
@@ -124,6 +130,42 @@ python src/analysis/run_analysis.py
 - `GET /risk/{cik}/history` - historical risk scores for one issuer
 - `GET /risk/{cik}/explain` - latest or date-specific evidence payload for one issuer
 
+`/risk/top` defaults to `limit=50` for interview-friendly ranked output.
+
+## Demo URL + Interview Quick Check
+Set your API URL (local or hosted):
+
+```bash
+export DEMO_URL="http://127.0.0.1:8000"
+```
+
+Quick 2-minute check before interviews:
+
+```bash
+# 1) API health and docs
+curl -sS "$DEMO_URL/health" && echo
+echo "$DEMO_URL/docs"
+
+# 2) Pull latest top ranking and assert non-empty response
+curl -sS "$DEMO_URL/risk/top" > /tmp/risk_top.json
+python - <<'PY'
+import json
+from pathlib import Path
+
+payload = json.loads(Path("/tmp/risk_top.json").read_text())
+items = payload.get("items", [])
+print("as_of_date:", payload.get("as_of_date"))
+print("total:", payload.get("total"))
+print("returned_items:", len(items))
+if not items:
+    raise SystemExit("ERROR: /risk/top returned no ranking items")
+top = items[0]
+print("top_cik:", top.get("cik"))
+print("top_score:", top.get("risk_score"))
+print("top_rank:", top.get("risk_rank"))
+PY
+```
+
 ## Notebooks
 - `notebooks/01_signal_qc.ipynb` - signal quality checks and exploratory analysis
 - `notebooks/02_risk_backtest.ipynb` - validation and backtesting workflow
@@ -132,6 +174,7 @@ python src/analysis/run_analysis.py
 - `docs/CodebaseSummary.md`
 - `docs/Methodology.md`
 - `docs/Backtesting.md`
+- `docs/DEMO_RUNBOOK.md`
 - `docs/Week1.md` and `docs/Week2.md` (historical planning notes)
 
 ## Project Structure
