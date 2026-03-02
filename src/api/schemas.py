@@ -77,3 +77,34 @@ class AlertSummary(BaseModel):
     by_severity: dict[str, int]
     recent_count: int
     recent_days: int = 7
+
+
+class RiskScore(BaseModel):
+    score_id: int
+    cik: int
+    as_of_date: str
+    model_version: str
+    risk_score: float
+    risk_rank: Optional[int] = None
+    percentile: Optional[float] = None
+    evidence: Any
+    created_at: str
+    updated_at: str
+    company_name: Optional[str] = None
+    company_ticker: Optional[str] = None
+
+
+class RiskScoreList(Pagination):
+    items: list[RiskScore]
+    as_of_date: Optional[str] = None
+    model_version: Optional[str] = None
+
+
+class RiskScoreHistory(Pagination):
+    cik: int
+    items: list[RiskScore]
+    model_version: Optional[str] = None
+
+
+class RiskExplanation(BaseModel):
+    score: RiskScore

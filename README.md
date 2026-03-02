@@ -78,6 +78,13 @@ Run locally:
 DRY_RUN=1 SEC_IDENTITY="Your Name you@example.com" python src/ingestion/poll.py
 ```
 
+Optional polling flags:
+- `POLL_ENABLE_CATCHUP` - enable/disable stale-company catch-up (default `1`)
+- `POLL_ENABLE_RISK_SCORING` - run issuer risk scoring after detections when new filings are inserted (default `1`)
+- `POLL_ENABLE_INLINE_ANALYSIS` - run detections/scoring inside `poll.py` (default `1`)
+- `POLL_LOCK_PATH` - lock file path used to prevent overlapping poll runs (default `.poller.lock`)
+- `POLL_LOCK_TIMEOUT_SECONDS` - lock acquire timeout; `0` means non-blocking exit when another run holds the lock
+
 ## Signal Detectors
 Run detectors against the local DB:
 ```bash
@@ -86,6 +93,36 @@ python src/detection/friday_detection.py
 python src/detection/spike_8k_detection.py
 python src/detection/run_all.py
 ```
+
+## Risk Scoring
+Build issuer-level disclosure-risk scores from existing alerts:
+```bash
+python src/analysis/build_risk_scores.py
+```
+
+Optional as-of date:
+```bash
+python src/analysis/build_risk_scores.py --as-of-date 2026-02-23
+```
+
+Run detectors + scoring as a separate scheduled analysis step:
+```bash
+python src/analysis/run_analysis.py
+```
+
+To fully split ingestion from analysis in cron:
+```bash
+# job 1: ingestion only
+POLL_ENABLE_INLINE_ANALYSIS=0 SEC_IDENTITY="Your Name you@example.com" python src/ingestion/poll.py
+
+# job 2: analysis
+python src/analysis/run_analysis.py
+```
+
+## Risk API Endpoints
+- `GET /risk/top` - ranked issuer risk scores (latest date by default)
+- `GET /risk/{cik}/history` - historical risk scores for one issuer
+- `GET /risk/{cik}/explain` - latest or date-specific evidence payload for one issuer
 
 ## Notebooks
 - `notebooks/01_signal_qc.ipynb` - signal quality checks and exploratory analysis
