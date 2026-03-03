@@ -1,4 +1,4 @@
-"""Build issuer-level disclosure-risk scores from existing alert signals."""
+"""Build issuer-level review-priority scores from alert signals."""
 
 from __future__ import annotations
 
@@ -22,6 +22,7 @@ LOOKBACK_WINDOWS = (30, 90)
 WINDOW_WEIGHTS = {30: 0.65, 90: 0.35}
 MODEL_VERSION = "v1_alert_composite"
 RECENCY_HALFLIFE_DAYS = 30.0
+TOP_ALERT_CONTRIBUTORS_LIMIT = 10
 
 ANOMALY_TYPE_WEIGHTS = {
     "NT_FILING": 0.45,
@@ -82,9 +83,14 @@ def _fetch_alert_rows(conn, as_of_date: str, max_lookback_days: int) -> list[Map
     rows = conn.execute(
         """
         SELECT
+            a.alert_id AS alert_id,
+            a.accession_id AS accession_id,
             f.cik AS cik,
+            f.filing_type AS filing_type,
+            f.filed_at AS filed_at,
             a.anomaly_type AS anomaly_type,
             a.severity_score AS severity_score,
+            a.description AS description,
             a.created_at AS created_at
         FROM alerts a
         JOIN filing_events f ON f.accession_id = a.accession_id
@@ -215,6 +221,100 @@ def _build_top_signals(features: Mapping[str, float | int]) -> list[dict[str, fl
     return signals
 
 
+def _build_component_breakdown(
+    features: Mapping[str, float | int],
+    lookback_days: int,
+) -> dict[str, Any]:
+    signal_components: dict[str, dict[str, float | int | str]] = {}
+    for anomaly_type, prefix in ANOMALY_PREFIX.items():
+        count = int(features[f"{prefix}_count"])
+        weighted = float(features[f"{prefix}_weighted_severity"])
+        scale = float(ANOMALY_COMPONENT_SCALES[anomaly_type])
+        component = float(features[f"{prefix}_component"])
+        anomaly_weight = float(ANOMALY_TYPE_WEIGHTS[anomaly_type])
+        signal_components[anomaly_type] = {
+            "signal": anomaly_type,
+            "count": count,
+            "weighted_severity": weighted,
+            "scale": scale,
+            "component": component,
+            "anomaly_weight": anomaly_weight,
+            "weight_contribution": component * anomaly_weight,
+        }
+
+    return {
+        "lookback_days": lookback_days,
+        "window_weight": float(WINDOW_WEIGHTS.get(lookback_days, 0.0)),
+        "window_score": float(features["window_score"]),
+        "signal_components": signal_components,
+    }
+
+
+def _build_reason_summary(top_signals: list[dict[str, float | int | str]]) -> str:
+    top_non_zero = [signal["signal"] for signal in top_signals if float(signal["component"]) > 0.0][:2]
+    if not top_non_zero:
+        return "No elevated anomaly signals in the recent review windows."
+    return "Top drivers: " + ", ".join(str(signal) for signal in top_non_zero) + "."
+
+
+def _build_top_contributing_alerts(
+    alert_rows: Iterable[Mapping[str, Any]],
+    as_of_date: str,
+    lookback_days: int,
+) -> dict[int, list[dict[str, float | int | str | None]]]:
+    as_of_day = date.fromisoformat(as_of_date)
+    candidates: dict[int, list[dict[str, float | int | str | None]]] = {}
+
+    for row in alert_rows:
+        anomaly_type = str(row["anomaly_type"])
+        if anomaly_type not in ANOMALY_TYPE_WEIGHTS:
+            continue
+
+        created_at = _parse_created_at(str(row["created_at"]))
+        age_days = (as_of_day - created_at.date()).days
+        if age_days < 0 or age_days > lookback_days:
+            continue
+
+        severity = _validate_severity(row["severity_score"])
+        recency = _recency_weight(age_days)
+        weighted_severity = severity * recency
+        contribution_proxy = (
+            weighted_severity
+            * float(ANOMALY_TYPE_WEIGHTS[anomaly_type])
+            / float(ANOMALY_COMPONENT_SCALES[anomaly_type])
+        )
+
+        cik = int(row["cik"])
+        candidates.setdefault(cik, []).append(
+            {
+                "alert_id": int(row["alert_id"]),
+                "accession_id": str(row["accession_id"]),
+                "anomaly_type": anomaly_type,
+                "severity_score": severity,
+                "recency_weight": recency,
+                "weighted_severity": weighted_severity,
+                "contribution_proxy": contribution_proxy,
+                "created_at": str(row["created_at"]),
+                "filing_type": row.get("filing_type"),
+                "filed_at": row.get("filed_at"),
+                "description": row.get("description"),
+            }
+        )
+
+    for cik, rows in candidates.items():
+        rows.sort(
+            key=lambda item: (
+                float(item["contribution_proxy"]),
+                float(item["weighted_severity"]),
+                str(item["created_at"]),
+            ),
+            reverse=True,
+        )
+        candidates[cik] = rows[:TOP_ALERT_CONTRIBUTORS_LIMIT]
+
+    return candidates
+
+
 def _compute_dense_rank_percentile_map(scores: Iterable[float]) -> dict[float, tuple[int, float]]:
     unique_scores = sorted(set(float(score) for score in scores), reverse=True)
     if not unique_scores:
@@ -236,7 +336,7 @@ def run_risk_scoring(
     path: Path = db_utils.DB_PATH,
     as_of_date: str | None = None,
 ) -> dict[str, int | str]:
-    """Compute and persist issuer-level risk scores from alert history."""
+    """Compute and persist issuer-level review-priority scores from alert history."""
     normalized_date = _normalize_as_of_date(as_of_date)
     lookback_windows = tuple(sorted(set(int(days) for days in LOOKBACK_WINDOWS)))
     max_lookback_days = max(lookback_windows)
@@ -260,6 +360,11 @@ def run_risk_scoring(
             alert_rows=alert_rows,
             as_of_date=normalized_date,
             lookback_windows=lookback_windows,
+        )
+        top_contributing_alerts = _build_top_contributing_alerts(
+            alert_rows=alert_rows,
+            as_of_date=normalized_date,
+            lookback_days=short_window,
         )
         snapshots_upserted = 0
 
@@ -298,15 +403,33 @@ def run_risk_scoring(
             }
             top_signals_key = f"top_signals_{short_window}d"
             source_alerts_key = f"source_alerts_{long_window}d"
+            component_breakdown = [
+                _build_component_breakdown(window_features[lookback_days][cik], lookback_days)
+                for lookback_days in lookback_windows
+            ]
+            top_signals = _build_top_signals(window_features[short_window][cik])
             evidence = {
                 "model_version": MODEL_VERSION,
                 "as_of_date": normalized_date,
-                "window_weights": WINDOW_WEIGHTS,
-                "anomaly_weights": ANOMALY_TYPE_WEIGHTS,
+                "window_weights": {str(window): float(weight) for window, weight in WINDOW_WEIGHTS.items()},
+                "anomaly_weights": {name: float(weight) for name, weight in ANOMALY_TYPE_WEIGHTS.items()},
+                "anomaly_component_scales": {
+                    name: float(scale) for name, scale in ANOMALY_COMPONENT_SCALES.items()
+                },
                 "window_scores": window_score_map,
-                top_signals_key: _build_top_signals(window_features[short_window][cik]),
+                top_signals_key: top_signals,
                 "lookback_windows_days": list(lookback_windows),
                 source_alerts_key: int(window_features[long_window][cik]["total_alerts"]),
+                "component_breakdown": component_breakdown,
+                "score_math": {
+                    "recency_halflife_days": float(RECENCY_HALFLIFE_DAYS),
+                    "window_score_formula": "weighted anomaly components normalized by total anomaly weight",
+                    "final_score_formula": "sum(window_score * window_weight) / sum(window_weight)",
+                    "final_score_raw": float(final_score),
+                },
+                "top_contributing_alerts_30d": top_contributing_alerts.get(cik, []),
+                "reason_summary": _build_reason_summary(top_signals),
+                "calibrated_review_priority": None,
             }
 
             db_utils.upsert_issuer_risk_score(
@@ -331,7 +454,7 @@ def run_risk_scoring(
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Build issuer risk scores from alert history.")
+    parser = argparse.ArgumentParser(description="Build issuer review-priority scores from alert history.")
     parser.add_argument(
         "--as-of-date",
         dest="as_of_date",

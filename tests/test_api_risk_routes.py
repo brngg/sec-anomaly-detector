@@ -58,7 +58,11 @@ def test_risk_top_defaults_to_latest_as_of_date(tmp_path: Path) -> None:
             risk_score=0.90,
             risk_rank=1,
             percentile=1.0,
-            evidence={"window_scores": {"30": 0.9, "90": 0.8}},
+            evidence={
+                "window_scores": {"30": 0.9, "90": 0.8},
+                "calibrated_review_priority": 0.77,
+                "reason_summary": "Top drivers: NT_FILING, 8K_SPIKE.",
+            },
         )
         upsert_issuer_risk_score(
             conn,
@@ -81,6 +85,7 @@ def test_risk_top_defaults_to_latest_as_of_date(tmp_path: Path) -> None:
     assert payload["items"][0]["cik"] == 1001
     assert payload["items"][0]["company_ticker"] == "HRI"
     assert isinstance(payload["items"][0]["evidence"], dict)
+    assert payload["items"][0]["calibrated_review_priority"] == 0.77
 
 
 def test_risk_history_and_explain(tmp_path: Path) -> None:

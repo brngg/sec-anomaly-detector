@@ -1,18 +1,18 @@
-# SEC Disclosure-Risk Monitor — Codebase Summary (Snapshot)
+# SEC Review Priority Monitor — Codebase Summary (Snapshot)
 
 **Date:** 2026-02-23  
-**Purpose:** Build an auditable, pre-enforcement disclosure-risk monitor using public SEC filing data.
+**Purpose:** Build an auditable, pre-enforcement review-priority monitor using public SEC filing data.
 
 ---
 
 ## Current State
 - Ingestion is production-like for MVP scope: backfill + hybrid poller + watermark tracking.
 - Event-level detectors are implemented and writing alerts.
-- Issuer-level risk scoring is implemented and persisted.
+- Issuer-level review-priority scoring is implemented and persisted.
 - API endpoints exist for companies, filings, alerts, and risk outputs.
 - Runtime is now documented for a decoupled operating model:
   - `poll.py` ingests filings only.
-  - `run_analysis.py` runs detectors and risk scoring separately.
+  - `run_analysis.py` runs detectors and review-priority scoring separately.
 
 ---
 
@@ -27,7 +27,7 @@
   - `src/detection/spike_8k_detection.py`
   - shared alert helper in `src/detection/alerts.py`
 - **Detector runner:** `src/detection/run_all.py`
-- **Risk scoring:**
+- **Review-priority scoring:**
   - `src/analysis/build_risk_scores.py`
   - `src/analysis/run_analysis.py` (detectors + optional scoring entrypoint)
 - **API:** `src/api/main.py`, `src/api/routes/*`

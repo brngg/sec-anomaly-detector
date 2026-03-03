@@ -38,10 +38,13 @@ def _row_to_alert(row: sqlite3.Row) -> Alert:
 
 @router.get("/alerts", response_model=AlertList)
 def list_alerts(
+    cik: Optional[int] = Query(None, description="Filter by issuer CIK"),
     anomaly_type: Optional[str] = Query(None, description="Filter by anomaly type"),
     status: Optional[AlertStatus] = Query(None, description="Filter by status"),
     min_severity: Optional[float] = Query(None, ge=0.0, le=1.0),
     max_severity: Optional[float] = Query(None, ge=0.0, le=1.0),
+    date_from: Optional[str] = Query(None, description="Inclusive start date YYYY-MM-DD"),
+    date_to: Optional[str] = Query(None, description="Inclusive end date YYYY-MM-DD"),
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
     db: sqlite3.Connection = Depends(get_db),
@@ -52,23 +55,37 @@ def list_alerts(
 
     params: list[object] = []
 
+    if cik is not None:
+        where.append("f.cik = ?")
+        params.append(cik)
     if anomaly_type:
-        where.append("anomaly_type = ?")
+        where.append("a.anomaly_type = ?")
         params.append(anomaly_type)
     if status:
-        where.append("status = ?")
+        where.append("a.status = ?")
         params.append(status.value)
     if min_severity is not None:
-        where.append("severity_score >= ?")
+        where.append("a.severity_score >= ?")
         params.append(min_severity)
     if max_severity is not None:
-        where.append("severity_score <= ?")
+        where.append("a.severity_score <= ?")
         params.append(max_severity)
+    if date_from:
+        where.append("a.created_at >= datetime(?)")
+        params.append(date_from)
+    if date_to:
+        where.append("a.created_at < datetime(?, '+1 day')")
+        params.append(date_to)
 
     where_sql = " WHERE " + " AND ".join(where) if where else ""
 
     total = db.execute(
-        f"SELECT COUNT(*) AS count FROM alerts{where_sql}",
+        f"""
+        SELECT COUNT(*) AS count
+        FROM alerts a
+        JOIN filing_events f ON f.accession_id = a.accession_id
+        {where_sql}
+        """,
         tuple(params),
     ).fetchone()["count"]
 
@@ -76,18 +93,19 @@ def list_alerts(
     rows = db.execute(
         f"""
         SELECT
-            alert_id,
-            accession_id,
-            anomaly_type,
-            severity_score,
-            description,
-            details,
-            status,
-            dedupe_key,
-            created_at
-        FROM alerts
+            a.alert_id,
+            a.accession_id,
+            a.anomaly_type,
+            a.severity_score,
+            a.description,
+            a.details,
+            a.status,
+            a.dedupe_key,
+            a.created_at
+        FROM alerts a
+        JOIN filing_events f ON f.accession_id = a.accession_id
         {where_sql}
-        ORDER BY created_at DESC
+        ORDER BY a.created_at DESC
         LIMIT ? OFFSET ?
         """,
         tuple(params_with_page),

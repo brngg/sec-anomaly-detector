@@ -1,13 +1,13 @@
-# SEC Disclosure-Risk Early Warning Index
+# SEC Review Priority Early Warning Index
 
-Public-data system for monitoring issuer disclosure risk using SEC EDGAR filings.
+Public-data system for monitoring issuer filing review priority using SEC EDGAR filings.
 
 ## Positioning
 This project does not attempt to establish legal proof of fraud.  
-It produces auditable, pre-enforcement risk signals to help prioritize issuer review.
+It produces auditable, pre-enforcement review-priority signals to help prioritize issuer review.
 
 ## Status
-Pivot in progress from event-level anomaly alerts to issuer-level risk monitoring.
+Pivot in progress from event-level anomaly alerts to issuer-level review-priority monitoring.
 
 ## Current Capabilities
 - SEC ingestion and polling for tracked issuers
@@ -18,7 +18,7 @@ Pivot in progress from event-level anomaly alerts to issuer-level risk monitorin
 - Alert storage, deduplication, and API retrieval
 
 ## Target Capabilities (Pivot)
-- Issuer-level disclosure-risk score (ranked watchlist)
+- Issuer-level review-priority score (ranked watchlist)
 - Evidence payload for score explainability
 - Forward-outcome backtesting using only public SEC data
 
@@ -100,8 +100,8 @@ python src/detection/spike_8k_detection.py
 python src/detection/run_all.py
 ```
 
-## Risk Scoring
-Build issuer-level disclosure-risk scores from existing alerts:
+## Review Priority Scoring
+Build issuer-level review-priority scores from existing alerts:
 ```bash
 python src/analysis/build_risk_scores.py
 ```
@@ -125,12 +125,19 @@ POLL_ENABLE_INLINE_ANALYSIS=0 SEC_IDENTITY="Your Name you@example.com" python sr
 python src/analysis/run_analysis.py
 ```
 
-## Risk API Endpoints
-- `GET /risk/top` - ranked issuer risk scores (latest date by default)
-- `GET /risk/{cik}/history` - historical risk scores for one issuer
+## Review Priority API Endpoints
+- `GET /risk/top` - ranked issuer review-priority scores (latest date by default)
+- `GET /risk/{cik}/history` - historical scores for one issuer
 - `GET /risk/{cik}/explain` - latest or date-specific evidence payload for one issuer
 
 `/risk/top` defaults to `limit=50` for interview-friendly ranked output.
+Compatibility note: endpoint paths remain `/risk/*` during this phase to avoid client breakage.
+
+## Outcome Label Import + Evaluation
+```bash
+python src/analysis/import_outcomes.py --input data/outcomes.csv
+python src/analysis/evaluate_review_priority.py
+```
 
 ## Demo URL + Interview Quick Check
 Set your API URL (local or hosted):
@@ -173,6 +180,8 @@ PY
 ## Documentation
 - `docs/CodebaseSummary.md`
 - `docs/Methodology.md`
+- `docs/ReviewPriorityScoreSpec.md`
+- `docs/DashboardDataContract.md`
 - `docs/Backtesting.md`
 - `docs/DEMO_RUNBOOK.md`
 - `docs/Week1.md` and `docs/Week2.md` (historical planning notes)

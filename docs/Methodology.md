@@ -1,50 +1,52 @@
-# Methodology: Disclosure-Risk Early Warning Index
+# Methodology: Review Priority Index
 
 ## Objective
-Rank issuers by near-term disclosure risk using only public SEC data.
+Rank issuers by near-term **review priority** using public SEC filing behavior.
 
 ## Scope
-- This system is a risk-prioritization tool.
+- This is a triage-prioritization system.
 - It does not claim to prove securities fraud or legal violations.
 
 ## Data Sources
 - SEC EDGAR filing metadata and form types
 - Public issuer metadata (CIK, ticker, name)
-- Publicly observable future outcomes used for evaluation labels
+- Publicly observable future outcomes used for validation labels
 
 ## Modeling Unit
-- Issuer-time snapshot (for example daily or weekly per CIK), not only single filing events.
+- Issuer-time snapshot (daily as-of date per CIK)
 
 ## Signal Families
-1. Timeliness signals  
-   Example: NT form events and recency.
-2. Timing-behavior signals  
-   Example: Friday after-hours filing density.
-3. Frequency-shift signals  
+1. Timeliness signals
+   Example: NT form events with recency weighting.
+2. Timing-behavior signals
+   Example: Friday after-hours filing behavior.
+3. Frequency-shift signals
    Example: company-vs-self 8-K spike behavior.
 
 ## Feature Construction
-- Build fixed lookback windows (for example 30/90 days).
-- Normalize signal magnitudes to comparable ranges.
-- Store all raw feature values for reproducibility and auditability.
+- Fixed lookback windows (30/90 days).
+- Recency decay with 30-day half-life.
+- Signal normalization to comparable component ranges.
+- Persisted feature snapshots and evidence payloads for auditability.
 
 ## Score Construction
 - Weighted composite score in `[0, 1]`.
-- Weights can start heuristic and later be tuned with walk-forward validation.
-- Every score record must include explainability fields:
-  - top contributing signals
-  - underlying counts and lookback windows
-  - as-of timestamp
+- Heuristic weights/scales in v1 with walk-forward validation and calibration.
+- Evidence includes:
+  - top signals
+  - component-level math
+  - top contributing source alerts
+  - as-of timestamp and model metadata
 
 ## Output Contract
-- Ranked issuer list by risk score
-- Per-issuer risk trend history
+- Ranked issuer list by review-priority score
+- Per-issuer trend history
 - Per-issuer evidence payload linking score to source filing events
 
 ## Claims and Communication
-Allowed:
-- "Higher risk score is associated with higher rate of adverse future disclosure outcomes."
+- "Higher review-priority score is associated with higher rate of adverse future disclosure outcomes."
 
-Not allowed:
+Not claming that:
 - "Model proves fraud."
 - "Model establishes legal liability."
+- "Company is fundamentally risky as a business."

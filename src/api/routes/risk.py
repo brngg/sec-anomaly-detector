@@ -1,4 +1,4 @@
-"""Issuer risk score endpoints."""
+"""Issuer review-priority score endpoints (served under legacy /risk paths)."""
 
 from __future__ import annotations
 
@@ -9,9 +9,9 @@ from typing import Any, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from ..deps import get_db
-from ..schemas import RiskExplanation, RiskScore, RiskScoreHistory, RiskScoreList
+from ..schemas import RiskExplanation, RiskScore, RiskScoreHistory, RiskScoreList, ReviewPriorityEvidence
 
-router = APIRouter(tags=["risk"])
+router = APIRouter(tags=["review-priority"])
 
 
 def _parse_json_text(raw: Optional[str]) -> Any:
@@ -25,7 +25,14 @@ def _parse_json_text(raw: Optional[str]) -> Any:
 
 def _row_to_risk_score(row: sqlite3.Row) -> RiskScore:
     data = dict(row)
-    data["evidence"] = _parse_json_text(data.get("evidence"))
+    parsed_evidence = _parse_json_text(data.get("evidence"))
+    if isinstance(parsed_evidence, dict):
+        data["calibrated_review_priority"] = parsed_evidence.get("calibrated_review_priority")
+        evidence_payload = parsed_evidence
+    else:
+        data["calibrated_review_priority"] = None
+        evidence_payload = {}
+    data["evidence"] = ReviewPriorityEvidence.model_validate(evidence_payload)
     return RiskScore(**data)
 
 
@@ -66,7 +73,10 @@ def _resolve_latest_as_of_date(
 @router.get("/risk/top", response_model=RiskScoreList)
 def list_top_risk(
     as_of_date: Optional[str] = Query(None, description="As-of date in YYYY-MM-DD"),
-    model_version: Optional[str] = Query(None, description="Filter by model version"),
+    model_version: Optional[str] = Query(
+        None,
+        description="Filter by model version (review-priority model)",
+    ),
     min_score: Optional[float] = Query(None, ge=0.0, le=1.0),
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
@@ -147,7 +157,10 @@ def list_top_risk(
 @router.get("/risk/{cik}/history", response_model=RiskScoreHistory)
 def get_risk_history(
     cik: int,
-    model_version: Optional[str] = Query(None, description="Filter by model version"),
+    model_version: Optional[str] = Query(
+        None,
+        description="Filter by model version (review-priority model)",
+    ),
     date_from: Optional[str] = Query(None, description="Inclusive start date YYYY-MM-DD"),
     date_to: Optional[str] = Query(None, description="Inclusive end date YYYY-MM-DD"),
     limit: int = Query(100, ge=1, le=500),
@@ -220,7 +233,7 @@ def get_risk_history(
 def get_risk_explanation(
     cik: int,
     as_of_date: Optional[str] = Query(None, description="As-of date in YYYY-MM-DD"),
-    model_version: Optional[str] = Query(None, description="Model version"),
+    model_version: Optional[str] = Query(None, description="Review-priority model version"),
     db: sqlite3.Connection = Depends(get_db),
 ) -> RiskExplanation:
     if not _company_exists(db, cik):

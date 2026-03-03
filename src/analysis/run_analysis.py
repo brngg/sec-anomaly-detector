@@ -1,4 +1,4 @@
-"""Run detectors and issuer risk scoring as a standalone analysis step."""
+"""Run detectors and issuer review-priority scoring as a standalone analysis step."""
 
 from __future__ import annotations
 
@@ -34,15 +34,15 @@ def main() -> int:
         print("Risk scoring disabled by POLL_ENABLE_RISK_SCORING.")
         return 0
 
-    print("Running issuer risk scoring...")
+    print("Running issuer review-priority scoring...")
     try:
         score_stats = run_risk_scoring()
     except Exception as e:
-        print(f"Risk scoring failed: {e}")
+        print(f"Review-priority scoring failed: {e}")
         return 1
 
     print(
-        "Risk scoring summary: "
+        "Review-priority scoring summary: "
         f"issuers_scored={score_stats['issuers_scored']} "
         f"snapshots_upserted={score_stats['snapshots_upserted']} "
         f"scores_upserted={score_stats['scores_upserted']} "

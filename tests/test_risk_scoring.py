@@ -138,6 +138,14 @@ def test_run_risk_scoring_builds_ranked_scores(tmp_path: Path) -> None:
     assert evidence["model_version"] == MODEL_VERSION
     assert "window_scores" in evidence
     assert f"top_signals_{min(LOOKBACK_WINDOWS)}d" in evidence
+    assert "component_breakdown" in evidence
+    assert "score_math" in evidence
+    assert "top_contributing_alerts_30d" in evidence
+    assert isinstance(evidence["top_contributing_alerts_30d"], list)
+    if evidence["top_contributing_alerts_30d"]:
+        contributor = evidence["top_contributing_alerts_30d"][0]
+        assert "alert_id" in contributor
+        assert "contribution_proxy" in contributor
 
 
 def test_equal_scores_share_rank_and_percentile(tmp_path: Path) -> None:
@@ -199,3 +207,54 @@ def test_out_of_range_severity_raises(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="severity_score out of expected range"):
         run_risk_scoring(path=db_path, as_of_date="2026-02-23")
+
+
+def test_score_is_monotonic_with_additional_alerts(tmp_path: Path) -> None:
+    db_path = tmp_path / "test.db"
+    create_db(path=db_path, reset=False)
+
+    with get_conn(path=db_path) as conn:
+        upsert_company(conn, cik=4001, name="Monotonic Co", ticker="MON", industry="Tech")
+        insert_filing(conn, "acc-4001-a", 4001, "8-K", "2026-02-22T10:00:00", "2026-02-22")
+        _insert_alert(
+            conn,
+            accession_id="acc-4001-a",
+            anomaly_type="NT_FILING",
+            severity_score=0.50,
+            created_at="2026-02-22 10:00:00",
+            dedupe_key="test:4001:nt:1",
+        )
+
+    run_risk_scoring(path=db_path, as_of_date="2026-02-23")
+    with get_conn(path=db_path) as conn:
+        first_score = conn.execute(
+            """
+            SELECT risk_score
+            FROM issuer_risk_scores
+            WHERE cik = 4001 AND as_of_date = '2026-02-23' AND model_version = ?
+            """,
+            (MODEL_VERSION,),
+        ).fetchone()["risk_score"]
+
+        insert_filing(conn, "acc-4001-b", 4001, "8-K", "2026-02-22T12:00:00", "2026-02-22")
+        _insert_alert(
+            conn,
+            accession_id="acc-4001-b",
+            anomaly_type="8K_SPIKE",
+            severity_score=0.60,
+            created_at="2026-02-22 12:00:00",
+            dedupe_key="test:4001:spike:2",
+        )
+
+    run_risk_scoring(path=db_path, as_of_date="2026-02-23")
+    with get_conn(path=db_path) as conn:
+        second_score = conn.execute(
+            """
+            SELECT risk_score
+            FROM issuer_risk_scores
+            WHERE cik = 4001 AND as_of_date = '2026-02-23' AND model_version = ?
+            """,
+            (MODEL_VERSION,),
+        ).fetchone()["risk_score"]
+
+    assert second_score >= first_score
