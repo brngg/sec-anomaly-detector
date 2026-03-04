@@ -191,3 +191,50 @@ def test_risk_endpoints_handle_missing_company_and_empty_scores(tmp_path: Path) 
     missing_explain = client.get("/risk/9999/explain")
     assert missing_explain.status_code == 404
     assert missing_explain.json()["detail"] == "Company not found"
+
+
+def test_risk_top_prefers_default_model_version_when_multiple_exist(tmp_path: Path) -> None:
+    db_path = tmp_path / "test.db"
+    create_db(path=db_path, reset=False)
+
+    with get_conn(path=db_path) as conn:
+        upsert_company(conn, cik=3001, name="Default Model Co", ticker="DMC", industry="Tech")
+
+        upsert_issuer_risk_score(
+            conn,
+            cik=3001,
+            as_of_date="2026-03-04",
+            model_version="v1_alert_composite",
+            risk_score=0.20,
+            risk_rank=1,
+            percentile=1.0,
+            evidence={"window_scores": {"30": 0.2, "90": 0.1}},
+        )
+        upsert_issuer_risk_score(
+            conn,
+            cik=3001,
+            as_of_date="2026-03-04",
+            model_version="v2_monthly_abnormal",
+            risk_score=0.80,
+            risk_rank=1,
+            percentile=1.0,
+            evidence={"monthly_baseline": {"current_interval_score_30d": 0.8}},
+        )
+
+    client = _build_client(db_path)
+
+    top_default = client.get("/risk/top")
+    assert top_default.status_code == 200
+    payload_default = top_default.json()
+    assert payload_default["total"] == 1
+    assert payload_default["model_version"] == "v2_monthly_abnormal"
+    assert payload_default["items"][0]["model_version"] == "v2_monthly_abnormal"
+    assert payload_default["items"][0]["risk_score"] == 0.8
+
+    top_v1 = client.get("/risk/top", params={"model_version": "v1_alert_composite"})
+    assert top_v1.status_code == 200
+    payload_v1 = top_v1.json()
+    assert payload_v1["total"] == 1
+    assert payload_v1["model_version"] == "v1_alert_composite"
+    assert payload_v1["items"][0]["model_version"] == "v1_alert_composite"
+    assert payload_v1["items"][0]["risk_score"] == 0.2

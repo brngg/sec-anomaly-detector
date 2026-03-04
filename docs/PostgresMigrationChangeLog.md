@@ -30,6 +30,11 @@ Implemented backend migration plumbing to support `DB_BACKEND` toggling between 
 - Fixed Postgres temporal type handling (`datetime` / `date`) in detectors.
 - Updated risk scoring to use `event_at` for recency/lookback logic.
 - Added JSON serialization hardening for native temporal objects in evidence payloads.
+- Added default monthly abnormal ranking mode (`v2_monthly_abnormal`):
+  - current 30-day interval issuer score from anomaly components
+  - comparison against issuer's own prior-month baseline (avg/std)
+  - ranking by current-month abnormality vs historical behavior
+- Kept legacy `v1_alert_composite` mode as explicit fallback.
 
 ## Ingestion and Scheduling
 - Updated poller lock strategy:

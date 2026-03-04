@@ -47,7 +47,9 @@ def main() -> int:
         f"snapshots_upserted={score_stats['snapshots_upserted']} "
         f"scores_upserted={score_stats['scores_upserted']} "
         f"source_alerts={score_stats['source_alerts']} "
-        f"as_of_date={score_stats['as_of_date']}"
+        f"as_of_date={score_stats['as_of_date']} "
+        f"scoring_mode={score_stats.get('scoring_mode')} "
+        f"model_version={score_stats.get('model_version')}"
     )
     return 0
 

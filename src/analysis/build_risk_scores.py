@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import sys
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -21,7 +22,19 @@ from src.db import db_utils  # noqa: E402
 
 LOOKBACK_WINDOWS = (30, 90)
 WINDOW_WEIGHTS = {30: 0.65, 90: 0.35}
-MODEL_VERSION = "v1_alert_composite"
+SCORING_MODE_ALERT_COMPOSITE = "alert_composite"
+SCORING_MODE_MONTHLY_ABNORMAL = "monthly_abnormal"
+SUPPORTED_SCORING_MODES = {
+    SCORING_MODE_ALERT_COMPOSITE,
+    SCORING_MODE_MONTHLY_ABNORMAL,
+}
+
+MODEL_VERSION_ALERT_COMPOSITE = "v1_alert_composite"
+MODEL_VERSION_MONTHLY_ABNORMAL = "v2_monthly_abnormal"
+DEFAULT_SCORING_MODE = SCORING_MODE_MONTHLY_ABNORMAL
+DEFAULT_MODEL_VERSION = MODEL_VERSION_MONTHLY_ABNORMAL
+# Backwards-compatible alias used by tests/importers.
+MODEL_VERSION = DEFAULT_MODEL_VERSION
 RECENCY_HALFLIFE_DAYS = 30.0
 TOP_ALERT_CONTRIBUTORS_LIMIT = 10
 
@@ -57,11 +70,80 @@ ANOMALY_PREFIX = {
     "8K_SPIKE": "spike",
 }
 
+MONTHLY_BASELINE_RELATIVE_DENOM_FLOOR = 0.05
+MONTHLY_BASELINE_STD_FLOOR = 0.05
+MONTHLY_LIFT_SATURATION = 3.0
+MONTHLY_Z_SATURATION = 3.0
+MONTHLY_SCORE_BLEND = {
+    "current_month": 0.35,
+    "relative_lift": 0.35,
+    "zscore": 0.30,
+}
+
 
 def _normalize_as_of_date(as_of_date: str | None) -> str:
     if as_of_date is None:
         return datetime.now(timezone.utc).date().isoformat()
     return date.fromisoformat(as_of_date).isoformat()
+
+
+def _normalize_month_start(value: date | str) -> date:
+    if isinstance(value, date):
+        return value.replace(day=1)
+    return date.fromisoformat(str(value)[:10]).replace(day=1)
+
+
+def _add_months(month_start: date, months: int) -> date:
+    month_index = (month_start.year * 12 + (month_start.month - 1)) + int(months)
+    year = month_index // 12
+    month = (month_index % 12) + 1
+    return date(year=year, month=month, day=1)
+
+
+def _iter_month_starts(start_month: date, end_month: date) -> list[date]:
+    months: list[date] = []
+    current = _normalize_month_start(start_month)
+    normalized_end = _normalize_month_start(end_month)
+    while current <= normalized_end:
+        months.append(current)
+        current = _add_months(current, 1)
+    return months
+
+
+def _parse_int_env(name: str, default: int | None = None) -> int | None:
+    raw = (os.getenv(name) or "").strip()
+    if not raw:
+        return default
+    return int(raw)
+
+
+def _resolve_scoring_mode(scoring_mode: str | None) -> str:
+    candidate = (scoring_mode or os.getenv("RISK_SCORING_MODE") or DEFAULT_SCORING_MODE).strip().lower()
+    if candidate not in SUPPORTED_SCORING_MODES:
+        supported = ", ".join(sorted(SUPPORTED_SCORING_MODES))
+        raise ValueError(f"Unsupported scoring mode '{candidate}'. Use one of: {supported}")
+    return candidate
+
+
+def _resolve_model_version(model_version: str | None, scoring_mode: str) -> str:
+    explicit = (model_version or os.getenv("RISK_MODEL_VERSION") or "").strip()
+    if explicit:
+        return explicit
+    if scoring_mode == SCORING_MODE_ALERT_COMPOSITE:
+        return MODEL_VERSION_ALERT_COMPOSITE
+    return MODEL_VERSION_MONTHLY_ABNORMAL
+
+
+def _resolve_monthly_history_months(monthly_history_months: int | None) -> int | None:
+    if monthly_history_months is not None:
+        if monthly_history_months <= 0:
+            return None
+        return int(monthly_history_months)
+
+    from_env = _parse_int_env("RISK_MONTHLY_HISTORY_MONTHS", default=None)
+    if from_env is None or from_env <= 0:
+        return None
+    return int(from_env)
 
 
 def _parse_timestamp(value: str) -> datetime:
@@ -539,6 +621,243 @@ def _build_top_contributing_alerts(
     return candidates
 
 
+def _month_bucket_expression(conn) -> str:
+    backend = db_utils.get_backend(conn)
+    if backend == db_utils.BACKEND_POSTGRES:
+        return "DATE_TRUNC('month', COALESCE(a.event_at, a.created_at))::date"
+    return "DATE(COALESCE(a.event_at, a.created_at), 'start of month')"
+
+
+def _fetch_monthly_alert_aggregates(
+    conn,
+    as_of_date: str,
+    *,
+    history_months: int | None = None,
+) -> list[dict[str, Any]]:
+    as_of_day = date.fromisoformat(as_of_date)
+    month_expr = _month_bucket_expression(conn)
+
+    where = ["COALESCE(a.event_at, a.created_at) < ?"]
+    end_ts = datetime.combine(
+        as_of_day + timedelta(days=1),
+        datetime.min.time(),
+        tzinfo=timezone.utc,
+    ).isoformat()
+    params: list[Any] = [end_ts]
+
+    if history_months is not None:
+        current_month = as_of_day.replace(day=1)
+        start_month = _add_months(current_month, -(history_months - 1))
+        start_ts = datetime.combine(start_month, datetime.min.time(), tzinfo=timezone.utc).isoformat()
+        where.insert(0, "COALESCE(a.event_at, a.created_at) >= ?")
+        params.insert(0, start_ts)
+
+    rows = conn.execute(
+        f"""
+        SELECT
+            f.cik AS cik,
+            {month_expr} AS month_start,
+            a.anomaly_type AS anomaly_type,
+            COUNT(*) AS alert_count,
+            COALESCE(SUM(a.severity_score), 0.0) AS severity_sum
+        FROM alerts a
+        JOIN filing_events f ON f.accession_id = a.accession_id
+        WHERE {" AND ".join(where)}
+        GROUP BY f.cik, {month_expr}, a.anomaly_type
+        ORDER BY month_start ASC, f.cik ASC, a.anomaly_type ASC
+        """,
+        tuple(params),
+    ).fetchall()
+
+    result: list[dict[str, Any]] = []
+    for row in rows:
+        raw_month = row["month_start"]
+        month_start = _normalize_month_start(raw_month)
+        result.append(
+            {
+                "cik": int(row["cik"]),
+                "month_start": month_start,
+                "anomaly_type": str(row["anomaly_type"]),
+                "alert_count": int(row["alert_count"] or 0),
+                "severity_sum": float(row["severity_sum"] or 0.0),
+            }
+        )
+    return result
+
+
+def _monthly_components_from_sums(
+    counts_by_type: Mapping[str, int],
+    severity_by_type: Mapping[str, float],
+) -> tuple[dict[str, float], dict[str, float], dict[str, int]]:
+    components: dict[str, float] = {}
+    weighted_severity: dict[str, float] = {}
+    counts: dict[str, int] = {}
+
+    for anomaly_type, prefix in ANOMALY_PREFIX.items():
+        severity = float(severity_by_type.get(anomaly_type, 0.0))
+        count = int(counts_by_type.get(anomaly_type, 0))
+        scale = float(ANOMALY_COMPONENT_SCALES[anomaly_type])
+        components[anomaly_type] = _clamp(min(severity / scale, 1.0))
+        weighted_severity[prefix] = severity
+        counts[prefix] = count
+
+    return components, weighted_severity, counts
+
+
+def _build_monthly_abnormal_metrics_by_cik(
+    ciks: Iterable[int],
+    monthly_rows: Iterable[Mapping[str, Any]],
+    as_of_date: str,
+    *,
+    history_months: int | None = None,
+    current_score_by_cik: Mapping[int, float] | None = None,
+) -> dict[int, dict[str, Any]]:
+    as_of_day = date.fromisoformat(as_of_date)
+    current_month = as_of_day.replace(day=1)
+
+    row_list = list(monthly_rows)
+    if history_months is not None:
+        start_month = _add_months(current_month, -(history_months - 1))
+    elif row_list:
+        start_month = min(_normalize_month_start(row["month_start"]) for row in row_list)
+    else:
+        start_month = current_month
+
+    month_axis = _iter_month_starts(start_month, current_month)
+    month_set = set(month_axis)
+
+    by_cik_month: dict[int, dict[date, dict[str, dict[str, float | int]]]] = {
+        int(cik): {
+            month: {
+                "count": {anomaly: 0 for anomaly in ANOMALY_TYPE_WEIGHTS},
+                "severity": {anomaly: 0.0 for anomaly in ANOMALY_TYPE_WEIGHTS},
+            }
+            for month in month_axis
+        }
+        for cik in ciks
+    }
+
+    for row in row_list:
+        anomaly_type = str(row["anomaly_type"])
+        if anomaly_type not in ANOMALY_TYPE_WEIGHTS:
+            continue
+        cik = int(row["cik"])
+        if cik not in by_cik_month:
+            continue
+        month_start = _normalize_month_start(row["month_start"])
+        if month_start not in month_set:
+            continue
+
+        bucket = by_cik_month[cik][month_start]
+        bucket["count"][anomaly_type] = int(bucket["count"][anomaly_type]) + int(row["alert_count"])
+        bucket["severity"][anomaly_type] = float(bucket["severity"][anomaly_type]) + float(
+            row["severity_sum"]
+        )
+
+    result: dict[int, dict[str, Any]] = {}
+    for cik in ciks:
+        cik_key = int(cik)
+        month_scores: dict[date, float] = {}
+        month_feature_rows: dict[date, dict[str, Any]] = {}
+
+        for month_start in month_axis:
+            bucket = by_cik_month[cik_key][month_start]
+            counts_by_type = {k: int(v) for k, v in dict(bucket["count"]).items()}
+            severity_by_type = {k: float(v) for k, v in dict(bucket["severity"]).items()}
+            components, weighted_severity, counts = _monthly_components_from_sums(
+                counts_by_type=counts_by_type,
+                severity_by_type=severity_by_type,
+            )
+            month_score = _score_from_components(components)
+            month_scores[month_start] = month_score
+            month_feature_rows[month_start] = {
+                "nt_count": counts["nt"],
+                "friday_count": counts["friday"],
+                "spike_count": counts["spike"],
+                "nt_weighted_severity": weighted_severity["nt"],
+                "friday_weighted_severity": weighted_severity["friday"],
+                "spike_weighted_severity": weighted_severity["spike"],
+                "nt_component": components["NT_FILING"],
+                "friday_component": components["FRIDAY_BURYING"],
+                "spike_component": components["8K_SPIKE"],
+            }
+
+        current_month_score = float(month_scores[current_month])
+        current_score = float(
+            current_score_by_cik.get(cik_key, current_month_score)
+            if current_score_by_cik is not None
+            else current_month_score
+        )
+        prior_scores = [float(month_scores[month]) for month in month_axis if month < current_month]
+        history_month_count = len(prior_scores)
+        if prior_scores:
+            baseline_avg = sum(prior_scores) / history_month_count
+            variance = sum((score - baseline_avg) ** 2 for score in prior_scores) / history_month_count
+            baseline_std = math.sqrt(max(0.0, variance))
+            delta = current_score - baseline_avg
+            relative_lift = delta / max(MONTHLY_BASELINE_RELATIVE_DENOM_FLOOR, baseline_avg)
+            zscore = delta / max(MONTHLY_BASELINE_STD_FLOOR, baseline_std)
+            lift_component = _clamp(max(0.0, relative_lift) / MONTHLY_LIFT_SATURATION)
+            zscore_component = _clamp(max(0.0, zscore) / MONTHLY_Z_SATURATION)
+            final_score = _clamp(
+                (MONTHLY_SCORE_BLEND["current_month"] * current_score)
+                + (MONTHLY_SCORE_BLEND["relative_lift"] * lift_component)
+                + (MONTHLY_SCORE_BLEND["zscore"] * zscore_component)
+            )
+        else:
+            baseline_avg = current_month_score
+            baseline_std = 0.0
+            delta = 0.0
+            relative_lift = 0.0
+            zscore = 0.0
+            lift_component = 0.0
+            zscore_component = 0.0
+            final_score = _clamp(current_score)
+
+        current_features = {
+            **month_feature_rows[current_month],
+            "total_alerts": int(
+                month_feature_rows[current_month]["nt_count"]
+                + month_feature_rows[current_month]["friday_count"]
+                + month_feature_rows[current_month]["spike_count"]
+            ),
+            "window_score": current_score,
+        }
+
+        month_history_recent = []
+        for month_start in month_axis[-12:]:
+            feature_row = month_feature_rows[month_start]
+            month_history_recent.append(
+                {
+                    "month_start": month_start.isoformat(),
+                    "score": float(month_scores[month_start]),
+                    "nt_count": int(feature_row["nt_count"]),
+                    "friday_count": int(feature_row["friday_count"]),
+                    "spike_count": int(feature_row["spike_count"]),
+                }
+            )
+
+        result[cik_key] = {
+            "start_month": start_month.isoformat(),
+            "current_month": current_month.isoformat(),
+            "current_month_score": current_month_score,
+            "current_interval_score": current_score,
+            "baseline_avg": baseline_avg,
+            "baseline_std": baseline_std,
+            "delta_vs_baseline": delta,
+            "relative_lift": relative_lift,
+            "zscore": zscore,
+            "relative_lift_component": lift_component,
+            "zscore_component": zscore_component,
+            "history_month_count": history_month_count,
+            "final_score": final_score,
+            "top_signals_monthly": _build_top_signals(current_features),
+            "month_history_recent": month_history_recent,
+        }
+
+    return result
+
+
 def _compute_dense_rank_percentile_map(scores: Iterable[float]) -> dict[float, tuple[int, float]]:
     unique_scores = sorted(set(float(score) for score in scores), reverse=True)
     if not unique_scores:
@@ -562,9 +881,15 @@ def run_risk_scoring(
     calibration_dir: Path = DEFAULT_CALIBRATION_DIR,
     calibration_warn_days: int = CALIBRATION_WARN_DAYS,
     calibration_expire_days: int = CALIBRATION_EXPIRE_DAYS,
+    scoring_mode: str | None = None,
+    model_version: str | None = None,
+    monthly_history_months: int | None = None,
 ) -> dict[str, Any]:
     """Compute and persist issuer-level review-priority scores from alert history."""
     normalized_date = _normalize_as_of_date(as_of_date)
+    resolved_mode = _resolve_scoring_mode(scoring_mode)
+    resolved_model_version = _resolve_model_version(model_version, resolved_mode)
+    resolved_monthly_history_months = _resolve_monthly_history_months(monthly_history_months)
     lookback_windows = tuple(sorted(set(int(days) for days in LOOKBACK_WINDOWS)))
     max_lookback_days = max(lookback_windows)
     short_window = min(lookback_windows)
@@ -587,7 +912,7 @@ def run_risk_scoring(
         prior_ranks = _fetch_prior_ranks(
             conn,
             as_of_date=normalized_date,
-            model_version=MODEL_VERSION,
+            model_version=resolved_model_version,
             lookback_days=RANK_STABILITY_LOOKBACK_DAYS,
         )
 
@@ -608,6 +933,24 @@ def run_risk_scoring(
             as_of_date=normalized_date,
             lookback_days=long_window,
         )
+        monthly_metrics_by_cik: dict[int, dict[str, Any]] = {}
+        if resolved_mode == SCORING_MODE_MONTHLY_ABNORMAL:
+            monthly_rows = _fetch_monthly_alert_aggregates(
+                conn,
+                normalized_date,
+                history_months=resolved_monthly_history_months,
+            )
+            current_score_by_cik = {
+                int(cik): float(window_features[short_window][cik]["window_score"])
+                for cik in ciks
+            }
+            monthly_metrics_by_cik = _build_monthly_abnormal_metrics_by_cik(
+                ciks=ciks,
+                monthly_rows=monthly_rows,
+                as_of_date=normalized_date,
+                history_months=resolved_monthly_history_months,
+                current_score_by_cik=current_score_by_cik,
+            )
 
         snapshots_upserted = 0
 
@@ -630,7 +973,15 @@ def run_risk_scoring(
                 lookback_days: float(window_features[lookback_days][cik]["window_score"])
                 for lookback_days in lookback_windows
             }
-            score_by_cik[cik] = _combine_window_scores(per_window)
+            raw_alert_composite_score = _combine_window_scores(per_window)
+            if resolved_mode == SCORING_MODE_MONTHLY_ABNORMAL:
+                monthly_metrics = monthly_metrics_by_cik.get(int(cik))
+                if monthly_metrics is None:
+                    score_by_cik[cik] = _clamp(raw_alert_composite_score)
+                else:
+                    score_by_cik[cik] = _clamp(float(monthly_metrics["final_score"]))
+            else:
+                score_by_cik[cik] = _clamp(raw_alert_composite_score)
 
         # Deterministic output order while preserving identical ranks for identical scores.
         sorted_scores = sorted(score_by_cik.items(), key=lambda item: (-item[1], item[0]))
@@ -657,6 +1008,32 @@ def run_risk_scoring(
                 for lookback_days in lookback_windows
             ]
             top_signals = _build_top_signals(window_features[short_window][cik])
+            monthly_top_signals: list[dict[str, float | int | str]] = []
+            monthly_baseline_payload: dict[str, Any] | None = None
+            final_score_formula = "sum(window_score * window_weight) / sum(window_weight)"
+            if resolved_mode == SCORING_MODE_MONTHLY_ABNORMAL:
+                monthly_metrics = monthly_metrics_by_cik.get(int(cik), {})
+                monthly_top_signals = top_signals
+                monthly_baseline_payload = {
+                    "history_start_month": monthly_metrics.get("start_month"),
+                    "current_month": monthly_metrics.get("current_month"),
+                    "history_month_count": int(monthly_metrics.get("history_month_count", 0)),
+                    "current_month_score": float(monthly_metrics.get("current_month_score", 0.0)),
+                    "current_interval_score_30d": float(monthly_metrics.get("current_interval_score", 0.0)),
+                    "baseline_avg": float(monthly_metrics.get("baseline_avg", 0.0)),
+                    "baseline_std": float(monthly_metrics.get("baseline_std", 0.0)),
+                    "delta_vs_baseline": float(monthly_metrics.get("delta_vs_baseline", 0.0)),
+                    "relative_lift": float(monthly_metrics.get("relative_lift", 0.0)),
+                    "zscore": float(monthly_metrics.get("zscore", 0.0)),
+                    "relative_lift_component": float(
+                        monthly_metrics.get("relative_lift_component", 0.0)
+                    ),
+                    "zscore_component": float(monthly_metrics.get("zscore_component", 0.0)),
+                    "month_history_recent": list(monthly_metrics.get("month_history_recent", [])),
+                }
+                final_score_formula = (
+                    "0.35*current_interval_score_30d + 0.35*relative_lift_component + 0.30*zscore_component"
+                )
 
             stability = _classify_rank_stability(
                 cik=cik,
@@ -688,8 +1065,10 @@ def run_risk_scoring(
             uncertainty_band = str(uncertainty["uncertainty_band"])
             uncertainty_band_counts[uncertainty_band] = uncertainty_band_counts.get(uncertainty_band, 0) + 1
 
+            reason_signals = monthly_top_signals if monthly_top_signals else top_signals
             evidence = {
-                "model_version": MODEL_VERSION,
+                "model_version": resolved_model_version,
+                "scoring_mode": resolved_mode,
                 "as_of_date": normalized_date,
                 "window_weights": {str(window): float(weight) for window, weight in WINDOW_WEIGHTS.items()},
                 "anomaly_weights": {name: float(weight) for name, weight in ANOMALY_TYPE_WEIGHTS.items()},
@@ -704,7 +1083,7 @@ def run_risk_scoring(
                 "score_math": {
                     "recency_halflife_days": float(RECENCY_HALFLIFE_DAYS),
                     "window_score_formula": "weighted anomaly components normalized by total anomaly weight",
-                    "final_score_formula": "sum(window_score * window_weight) / sum(window_weight)",
+                    "final_score_formula": final_score_formula,
                     "final_score_raw": float(raw_final_score),
                     "final_score_clamped": final_score,
                 },
@@ -714,17 +1093,20 @@ def run_risk_scoring(
                 "calibrated_review_priority": calibration_decision.calibrated_score,
                 "calibration_metadata": calibration_metadata,
                 "reason_summary": _build_reason_summary(
-                    top_signals,
+                    reason_signals,
                     stability_state=stability_state,
                     uncertainty_band=uncertainty_band,
                 ),
             }
+            if monthly_baseline_payload is not None:
+                evidence["top_signals_monthly"] = monthly_top_signals
+                evidence["monthly_baseline"] = monthly_baseline_payload
 
             db_utils.upsert_issuer_risk_score(
                 conn=conn,
                 cik=cik,
                 as_of_date=normalized_date,
-                model_version=MODEL_VERSION,
+                model_version=resolved_model_version,
                 risk_score=final_score,
                 risk_rank=rank,
                 percentile=percentile,
@@ -734,10 +1116,13 @@ def run_risk_scoring(
 
     return {
         "as_of_date": normalized_date,
+        "scoring_mode": resolved_mode,
+        "model_version": resolved_model_version,
         "issuers_scored": issuers_count,
         "snapshots_upserted": snapshots_upserted,
         "scores_upserted": scores_upserted,
         "source_alerts": len(alert_rows),
+        "monthly_history_months": resolved_monthly_history_months,
         "calibration_status_distribution": calibration_status_counts,
         "uncertainty_band_distribution": uncertainty_band_counts,
         "stability_state_distribution": stability_state_counts,
@@ -779,6 +1164,26 @@ def _build_parser() -> argparse.ArgumentParser:
         default=CALIBRATION_EXPIRE_DAYS,
         help="Artifact staleness threshold for disabling calibration.",
     )
+    parser.add_argument(
+        "--scoring-mode",
+        dest="scoring_mode",
+        choices=sorted(SUPPORTED_SCORING_MODES),
+        default=None,
+        help="Scoring mode: monthly history-relative or legacy alert composite.",
+    )
+    parser.add_argument(
+        "--model-version",
+        dest="model_version",
+        default=None,
+        help="Optional explicit model version label for writes.",
+    )
+    parser.add_argument(
+        "--monthly-history-months",
+        dest="monthly_history_months",
+        type=int,
+        default=None,
+        help="Optional monthly history window; unset means all available history.",
+    )
     return parser
 
 
@@ -789,6 +1194,9 @@ def main() -> int:
         calibration_dir=Path(args.calibration_dir),
         calibration_warn_days=args.calibration_warn_days,
         calibration_expire_days=args.calibration_expire_days,
+        scoring_mode=args.scoring_mode,
+        model_version=args.model_version,
+        monthly_history_months=args.monthly_history_months,
     )
     print(json.dumps(stats, indent=2, sort_keys=True))
     return 0

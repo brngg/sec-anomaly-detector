@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -11,6 +12,7 @@ from ..deps import get_db
 from ..schemas import RiskExplanation, RiskScore, RiskScoreHistory, RiskScoreList, ReviewPriorityEvidence
 
 router = APIRouter(tags=["review-priority"])
+DEFAULT_MODEL_VERSION = os.getenv("RISK_DEFAULT_MODEL_VERSION", "v2_monthly_abnormal")
 
 
 def _parse_json_payload(raw: Any) -> Any:
@@ -73,6 +75,31 @@ def _resolve_latest_as_of_date(
     return row["as_of_date"]
 
 
+def _resolve_model_version_or_default(db, model_version: Optional[str]) -> Optional[str]:
+    if model_version:
+        return model_version
+
+    preferred = DEFAULT_MODEL_VERSION
+    exists = db.execute(
+        "SELECT 1 FROM issuer_risk_scores WHERE model_version = ? LIMIT 1",
+        (preferred,),
+    ).fetchone()
+    if exists is not None:
+        return preferred
+
+    latest = db.execute(
+        """
+        SELECT model_version
+        FROM issuer_risk_scores
+        ORDER BY as_of_date DESC, updated_at DESC, model_version DESC
+        LIMIT 1
+        """
+    ).fetchone()
+    if latest is None:
+        return None
+    return latest["model_version"]
+
+
 @router.get("/risk/top", response_model=RiskScoreList)
 def list_top_risk(
     as_of_date: Optional[str] = Query(None, description="As-of date in YYYY-MM-DD"),
@@ -85,9 +112,10 @@ def list_top_risk(
     offset: int = Query(0, ge=0),
     db=Depends(get_db),
 ) -> RiskScoreList:
+    effective_model_version = _resolve_model_version_or_default(db, model_version)
     effective_as_of_date = as_of_date or _resolve_latest_as_of_date(
         db,
-        model_version=model_version,
+        model_version=effective_model_version,
         min_score=min_score,
     )
 
@@ -98,15 +126,15 @@ def list_top_risk(
             limit=limit,
             offset=offset,
             as_of_date=None,
-            model_version=model_version,
+            model_version=effective_model_version,
         )
 
     where = ["r.as_of_date = ?"]
     params: list[object] = [effective_as_of_date]
 
-    if model_version:
+    if effective_model_version:
         where.append("r.model_version = ?")
-        params.append(model_version)
+        params.append(effective_model_version)
     if min_score is not None:
         where.append("r.risk_score >= ?")
         params.append(min_score)
@@ -153,7 +181,7 @@ def list_top_risk(
         limit=limit,
         offset=offset,
         as_of_date=effective_as_of_date,
-        model_version=model_version,
+        model_version=effective_model_version,
     )
 
 
@@ -173,12 +201,13 @@ def get_risk_history(
     if not _company_exists(db, cik):
         raise HTTPException(status_code=404, detail="Company not found")
 
+    effective_model_version = _resolve_model_version_or_default(db, model_version)
     where = ["r.cik = ?"]
     params: list[object] = [cik]
 
-    if model_version:
+    if effective_model_version:
         where.append("r.model_version = ?")
-        params.append(model_version)
+        params.append(effective_model_version)
     if date_from:
         where.append("r.as_of_date >= ?")
         params.append(date_from)
@@ -228,7 +257,7 @@ def get_risk_history(
         total=total,
         limit=limit,
         offset=offset,
-        model_version=model_version,
+        model_version=effective_model_version,
     )
 
 
@@ -242,10 +271,11 @@ def get_risk_explanation(
     if not _company_exists(db, cik):
         raise HTTPException(status_code=404, detail="Company not found")
 
+    effective_model_version = _resolve_model_version_or_default(db, model_version)
     effective_as_of_date = as_of_date or _resolve_latest_as_of_date(
         db,
         cik=cik,
-        model_version=model_version,
+        model_version=effective_model_version,
     )
     if effective_as_of_date is None:
         raise HTTPException(status_code=404, detail="Risk score not found")
@@ -253,9 +283,9 @@ def get_risk_explanation(
     where = ["r.cik = ?", "r.as_of_date = ?"]
     params: list[object] = [cik, effective_as_of_date]
 
-    if model_version:
+    if effective_model_version:
         where.append("r.model_version = ?")
-        params.append(model_version)
+        params.append(effective_model_version)
 
     where_sql = " WHERE " + " AND ".join(where)
     row = db.execute(

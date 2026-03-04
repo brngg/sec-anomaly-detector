@@ -1,6 +1,6 @@
 # SEC Review Priority Monitor — Unified Codebase Summary
 
-**Last updated:** 2026-03-03
+**Last updated:** 2026-03-04
 
 ## 1) What This Project Is
 - A public-data SEC filing triage system.
@@ -107,8 +107,8 @@ Database backend is runtime-selectable via `DB_BACKEND`:
 Key note:
 - `outcome_events` is not required for leaderboard generation.
 
-## 7) Scoring Summary (v1)
-Model version: `v1_alert_composite`
+## 7) Scoring Summary (Default)
+Default model version: `v2_monthly_abnormal`
 
 Signals used:
 - `NT_FILING`
@@ -116,16 +116,23 @@ Signals used:
 - `8K_SPIKE`
 
 Scoring approach:
-- recency decay (30-day half-life)
-- two windows (30d, 90d)
-- weighted aggregation into `risk_score` in `[0,1]`
+- monthly issuer score built from weighted signal components
+- baseline from issuer's own prior months (average + std)
+- current 30-day interval abnormality vs monthly baseline drives ranking
+- blend formula: `0.35*current_interval_30d + 0.35*relative_lift + 0.30*zscore_component`
 - deterministic ordering by rank/score/cik
 
 Evidence payload includes:
 - component math and top contributors
+- monthly baseline diagnostics and month-over-month deltas
 - rank stability diagnostics
 - uncertainty band
 - optional calibrated score + calibration metadata
+
+Legacy scoring remains available:
+- mode: `alert_composite`
+- model: `v1_alert_composite`
+- behavior: 30/90-day recency-weighted window composite
 
 ## 8) API Contract (What Frontend Needs)
 Primary endpoints:
@@ -162,6 +169,9 @@ Ingestion:
 
 Analysis:
 - `POLL_ENABLE_RISK_SCORING` (controls scoring inside `run_analysis.py`)
+- `RISK_SCORING_MODE` (`monthly_abnormal` default, `alert_composite` legacy)
+- `RISK_DEFAULT_MODEL_VERSION` (API default model selector; default `v2_monthly_abnormal`)
+- `RISK_MONTHLY_HISTORY_MONTHS` (optional baseline history window in months)
 
 Validation fetchers:
 - `SEC_IDENTITY` for candidate generation and verification

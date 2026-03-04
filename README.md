@@ -54,6 +54,9 @@ Environment variables:
 - `DB_BACKEND` - backend toggle: `postgres` or `sqlite`
 - `DATABASE_URL` - RW DSN when `DB_BACKEND=postgres` (Supabase pooler URL, `sslmode=require`)
 - `API_DATABASE_URL` - optional RO DSN when `DB_BACKEND=postgres`
+- `RISK_SCORING_MODE` - scoring mode (`monthly_abnormal` default, `alert_composite` legacy)
+- `RISK_DEFAULT_MODEL_VERSION` - API default model selector (default `v2_monthly_abnormal`)
+- `RISK_MONTHLY_HISTORY_MONTHS` - optional history window for monthly baseline (unset = all available history)
 - `SEC_IDENTITY` - SEC identity string (recommended)
 - `COMPANIES_CSV` - Optional path to a custom CSV file
 - `BACKFILL_START_DATE` - optional explicit backfill start date (`YYYY-MM-DD`)
@@ -131,9 +134,19 @@ Build issuer-level review-priority scores from existing alerts:
 python src/analysis/build_risk_scores.py
 ```
 
+Default mode is `monthly_abnormal` (`v2_monthly_abnormal`):
+- each issuer gets a score for the current trailing 30-day interval
+- that interval is compared against the issuer's own prior-month average/std baseline
+- ranking is driven by abnormal month-over-month lift (with Friday-burying and 8-K spike components included)
+
 Optional as-of date:
 ```bash
 python src/analysis/build_risk_scores.py --as-of-date 2026-02-23
+```
+
+Legacy mode (old recency-window composite) remains available:
+```bash
+python src/analysis/build_risk_scores.py --scoring-mode alert_composite --model-version v1_alert_composite
 ```
 
 Run detectors + scoring as a separate scheduled analysis step:
@@ -159,6 +172,15 @@ Historical score reconstruction (daily snapshots across 24 months):
 DB_BACKEND=postgres \
 DATABASE_URL="postgresql://app_rw:***@db.example.supabase.co:6543/postgres?sslmode=require" \
 BACKFILL_DAYS=730 \
+python src/analysis/backfill_risk_scores.py
+```
+
+Monthly-abnormal backfill (default model):
+```bash
+DB_BACKEND=postgres \
+DATABASE_URL="postgresql://app_rw:***@db.example.supabase.co:6543/postgres?sslmode=require" \
+BACKFILL_DAYS=730 \
+RISK_SCORING_MODE=monthly_abnormal \
 python src/analysis/backfill_risk_scores.py
 ```
 

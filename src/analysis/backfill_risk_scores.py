@@ -52,6 +52,9 @@ def backfill_daily_scores(
     end_date: date,
     db_path: Path | None = None,
     progress_every: int = 25,
+    scoring_mode: str | None = None,
+    model_version: str | None = None,
+    monthly_history_months: int | None = None,
 ) -> dict[str, Any]:
     if start_date > end_date:
         raise ValueError("start_date cannot be after end_date")
@@ -72,7 +75,13 @@ def backfill_daily_scores(
     last_stats: dict[str, Any] | None = None
 
     while current <= end_date:
-        stats = run_risk_scoring(path=db_path, as_of_date=current.isoformat())
+        stats = run_risk_scoring(
+            path=db_path,
+            as_of_date=current.isoformat(),
+            scoring_mode=scoring_mode,
+            model_version=model_version,
+            monthly_history_months=monthly_history_months,
+        )
         days_processed += 1
         scores_upserted = int(stats.get("scores_upserted", 0))
         total_scores += scores_upserted
@@ -128,6 +137,22 @@ def _build_parser() -> argparse.ArgumentParser:
         default=25,
         help="Print progress every N processed days (0 to disable).",
     )
+    parser.add_argument(
+        "--scoring-mode",
+        default=None,
+        help="Optional scoring mode override (monthly_abnormal or alert_composite).",
+    )
+    parser.add_argument(
+        "--model-version",
+        default=None,
+        help="Optional explicit model version label.",
+    )
+    parser.add_argument(
+        "--monthly-history-months",
+        type=int,
+        default=None,
+        help="Optional monthly history window; unset means all available history.",
+    )
     return parser
 
 
@@ -142,6 +167,9 @@ def main() -> int:
         end_date=end_day,
         db_path=Path(args.db_path) if args.db_path else None,
         progress_every=args.progress_every,
+        scoring_mode=args.scoring_mode,
+        model_version=args.model_version,
+        monthly_history_months=args.monthly_history_months,
     )
     print(json.dumps(summary, indent=2, sort_keys=True))
     return 0
