@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sys
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import List, Optional, Tuple
 from zoneinfo import ZoneInfo
@@ -35,10 +35,14 @@ class FridayFiling:
     company_ticker: Optional[str]
 
 
-def _parse_utc(ts: str) -> datetime:
-    """Parse ISO-ish timestamps into UTC datetimes."""
-    if not ts:
+def _parse_utc(ts) -> datetime:
+    """Parse timestamp-ish values into UTC datetimes."""
+    if ts is None:
         return datetime.now(timezone.utc)
+    if isinstance(ts, datetime):
+        return ts if ts.tzinfo else ts.replace(tzinfo=timezone.utc)
+    if isinstance(ts, date):
+        return datetime.combine(ts, datetime.min.time(), tzinfo=timezone.utc)
     text = ts.strip()
     if text.endswith("Z"):
         text = text[:-1] + "+00:00"
@@ -57,6 +61,14 @@ def _is_friday_burying(filed_at: str) -> bool:
 def score_friday_burying() -> float:
     """Simple fixed score for MVP."""
     return DEFAULT_SEVERITY
+
+
+def _stringify_temporal(value) -> str:
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    return str(value)
 
 
 def fetch_friday_filings(conn) -> List[FridayFiling]:
@@ -87,8 +99,8 @@ def fetch_friday_filings(conn) -> List[FridayFiling]:
             accession_id=row["accession_id"],
             cik=row["cik"],
             filing_type=row["filing_type"],
-            filed_at=row["filed_at"],
-            filed_date=row["filed_date"],
+            filed_at=_stringify_temporal(row["filed_at"]),
+            filed_date=_stringify_temporal(row["filed_date"]),
             company_name=row["company_name"],
             company_ticker=row["company_ticker"],
         )
@@ -122,6 +134,7 @@ def run_friday_detection() -> Tuple[int, int]:
                 severity_score=severity,
                 description=description,
                 details=details,
+                event_at=filing.filed_at,
             ):
                 inserted += 1
 

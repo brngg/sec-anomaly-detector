@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sys
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -45,9 +45,13 @@ class SpikeEvent:
     threshold: float
 
 
-def _parse_dt(value: str) -> datetime:
-    if not value:
+def _parse_dt(value) -> datetime:
+    if value is None:
         return datetime.now(timezone.utc)
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    if isinstance(value, date):
+        return datetime.combine(value, datetime.min.time(), tzinfo=timezone.utc)
     text = value.strip()
     if text.endswith("Z"):
         text = text[:-1] + "+00:00"
@@ -55,10 +59,14 @@ def _parse_dt(value: str) -> datetime:
     return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
 
-def _month_key(filed_date: str, filed_at: str) -> str:
-    if filed_date:
+def _month_key(filed_date, filed_at) -> str:
+    if isinstance(filed_date, date):
+        return filed_date.strftime("%Y-%m")
+    if isinstance(filed_date, str) and filed_date:
         return filed_date[:7]
-    return filed_at[:7]
+    if isinstance(filed_at, datetime):
+        return filed_at.strftime("%Y-%m")
+    return str(filed_at)[:7]
 
 
 def _add_months(year: int, month: int, delta: int) -> Tuple[int, int]:
@@ -140,6 +148,9 @@ def score_monthly_spike(count: int, mean: float, std: float) -> float:
 
 
 def fetch_8k_filings(conn) -> List[SpikeFiling]:
+    today = datetime.now(timezone.utc).date()
+    cutoff_year, cutoff_month_num = _add_months(today.year, today.month, -LOOKBACK_MONTHS)
+    cutoff_month = f"{cutoff_year:04d}-{cutoff_month_num:02d}-01"
     rows = conn.execute(
         """
         SELECT
@@ -150,10 +161,10 @@ def fetch_8k_filings(conn) -> List[SpikeFiling]:
             filed_date
         FROM filing_events
         WHERE filing_type IN ({})
-          AND filed_date >= date('now', ?)
+          AND filed_date >= ?
         ORDER BY filed_at DESC
         """.format(",".join("?" * len(TARGET_FORMS))),
-        (*TARGET_FORMS, f"-{LOOKBACK_MONTHS} months"),
+        (*TARGET_FORMS, cutoff_month),
     ).fetchall()
 
     filings: List[SpikeFiling] = []
@@ -288,6 +299,7 @@ def run_8k_spike_detection() -> Tuple[int, int]:
                 description=description,
                 details=details,
                 dedupe_key=dedupe_key,
+                event_at=spike.month + "-01T00:00:00+00:00",
             ):
                 inserted += 1
 

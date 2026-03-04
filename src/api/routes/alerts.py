@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-import sqlite3
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -26,11 +26,19 @@ def _parse_details(raw: Optional[str]) -> Any:
         return None
     try:
         return json.loads(raw)
-    except json.JSONDecodeError:
+    except (json.JSONDecodeError, TypeError):
         return raw
 
 
-def _row_to_alert(row: sqlite3.Row) -> Alert:
+def _day_start(value: str) -> str:
+    return date.fromisoformat(value).isoformat()
+
+
+def _day_end_exclusive(value: str) -> str:
+    return (date.fromisoformat(value) + timedelta(days=1)).isoformat()
+
+
+def _row_to_alert(row: Any) -> Alert:
     data = dict(row)
     data["details"] = _parse_details(data.get("details"))
     return Alert(**data)
@@ -47,7 +55,7 @@ def list_alerts(
     date_to: Optional[str] = Query(None, description="Inclusive end date YYYY-MM-DD"),
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
-    db: sqlite3.Connection = Depends(get_db),
+    db=Depends(get_db),
 ) -> AlertList:
     where = []
     if min_severity is not None and max_severity is not None and min_severity > max_severity:
@@ -71,11 +79,11 @@ def list_alerts(
         where.append("a.severity_score <= ?")
         params.append(max_severity)
     if date_from:
-        where.append("a.created_at >= datetime(?)")
-        params.append(date_from)
+        where.append("COALESCE(a.event_at, a.created_at) >= ?")
+        params.append(_day_start(date_from))
     if date_to:
-        where.append("a.created_at < datetime(?, '+1 day')")
-        params.append(date_to)
+        where.append("COALESCE(a.event_at, a.created_at) < ?")
+        params.append(_day_end_exclusive(date_to))
 
     where_sql = " WHERE " + " AND ".join(where) if where else ""
 
@@ -89,7 +97,7 @@ def list_alerts(
         tuple(params),
     ).fetchone()["count"]
 
-    params_with_page = params + [limit, offset]
+    params_with_page = [*params, limit, offset]
     rows = db.execute(
         f"""
         SELECT
@@ -101,11 +109,12 @@ def list_alerts(
             a.details,
             a.status,
             a.dedupe_key,
+            a.event_at,
             a.created_at
         FROM alerts a
         JOIN filing_events f ON f.accession_id = a.accession_id
         {where_sql}
-        ORDER BY a.created_at DESC
+        ORDER BY COALESCE(a.event_at, a.created_at) DESC, a.alert_id DESC
         LIMIT ? OFFSET ?
         """,
         tuple(params_with_page),
@@ -115,90 +124,9 @@ def list_alerts(
     return AlertList(items=items, total=total, limit=limit, offset=offset)
 
 
-@router.get("/alerts/{alert_id}", response_model=Alert)
-def get_alert(
-    alert_id: int,
-    db: sqlite3.Connection = Depends(get_db),
-) -> Alert:
-    row = db.execute(
-        """
-        SELECT
-            alert_id,
-            accession_id,
-            anomaly_type,
-            severity_score,
-            description,
-            details,
-            status,
-            dedupe_key,
-            created_at
-        FROM alerts
-        WHERE alert_id = ?
-        """,
-        (alert_id,),
-    ).fetchone()
-
-    if row is None:
-        raise HTTPException(status_code=404, detail="Alert not found")
-
-    return _row_to_alert(row)
-
-
-@router.patch("/alerts/{alert_id}/status", response_model=Alert)
-def update_alert_status(
-    alert_id: int,
-    payload: AlertStatusUpdate,
-    db: sqlite3.Connection = Depends(get_db),
-) -> Alert:
-    cur = db.execute(
-        "UPDATE alerts SET status = ? WHERE alert_id = ?",
-        (payload.status.value, alert_id),
-    )
-
-    if cur.rowcount == 0:
-        raise HTTPException(status_code=404, detail="Alert not found")
-
-    row = db.execute(
-        """
-        SELECT
-            alert_id,
-            accession_id,
-            anomaly_type,
-            severity_score,
-            description,
-            details,
-            status,
-            dedupe_key,
-            created_at
-        FROM alerts
-        WHERE alert_id = ?
-        """,
-        (alert_id,),
-    ).fetchone()
-
-    return _row_to_alert(row)
-
-
-@router.patch("/alerts/bulk-status")
-def bulk_update_alert_status(
-    payload: AlertBulkStatusUpdate,
-    db: sqlite3.Connection = Depends(get_db),
-) -> dict:
-    alert_ids = payload.alert_ids
-    placeholders = ", ".join(["?"] * len(alert_ids))
-    params = [payload.status.value, *alert_ids]
-
-    cur = db.execute(
-        f"UPDATE alerts SET status = ? WHERE alert_id IN ({placeholders})",
-        params,
-    )
-
-    return {"updated": cur.rowcount}
-
-
 @router.get("/alerts/summary", response_model=AlertSummary)
 def get_alert_summary(
-    db: sqlite3.Connection = Depends(get_db),
+    db=Depends(get_db),
 ) -> AlertSummary:
     total = db.execute("SELECT COUNT(*) AS count FROM alerts").fetchone()["count"]
 
@@ -228,9 +156,14 @@ def get_alert_summary(
     }
 
     recent_days = 7
+    recent_cutoff = (datetime.now(timezone.utc) - timedelta(days=recent_days)).isoformat()
     recent_count = db.execute(
-        "SELECT COUNT(*) AS count FROM alerts WHERE created_at >= datetime('now', ?)",
-        (f"-{recent_days} days",),
+        """
+        SELECT COUNT(*) AS count
+        FROM alerts
+        WHERE COALESCE(event_at, created_at) >= ?
+        """,
+        (recent_cutoff,),
     ).fetchone()["count"]
 
     return AlertSummary(
@@ -241,3 +174,86 @@ def get_alert_summary(
         recent_count=recent_count,
         recent_days=recent_days,
     )
+
+
+@router.get("/alerts/{alert_id}", response_model=Alert)
+def get_alert(
+    alert_id: int,
+    db=Depends(get_db),
+) -> Alert:
+    row = db.execute(
+        """
+        SELECT
+            alert_id,
+            accession_id,
+            anomaly_type,
+            severity_score,
+            description,
+            details,
+            status,
+            dedupe_key,
+            event_at,
+            created_at
+        FROM alerts
+        WHERE alert_id = ?
+        """,
+        (alert_id,),
+    ).fetchone()
+
+    if row is None:
+        raise HTTPException(status_code=404, detail="Alert not found")
+
+    return _row_to_alert(row)
+
+
+@router.patch("/alerts/{alert_id}/status", response_model=Alert)
+def update_alert_status(
+    alert_id: int,
+    payload: AlertStatusUpdate,
+    db=Depends(get_db),
+) -> Alert:
+    cur = db.execute(
+        "UPDATE alerts SET status = ? WHERE alert_id = ?",
+        (payload.status.value, alert_id),
+    )
+
+    if cur.rowcount == 0:
+        raise HTTPException(status_code=404, detail="Alert not found")
+
+    row = db.execute(
+        """
+        SELECT
+            alert_id,
+            accession_id,
+            anomaly_type,
+            severity_score,
+            description,
+            details,
+            status,
+            dedupe_key,
+            event_at,
+            created_at
+        FROM alerts
+        WHERE alert_id = ?
+        """,
+        (alert_id,),
+    ).fetchone()
+
+    return _row_to_alert(row)
+
+
+@router.patch("/alerts/bulk-status")
+def bulk_update_alert_status(
+    payload: AlertBulkStatusUpdate,
+    db=Depends(get_db),
+) -> dict:
+    alert_ids = payload.alert_ids
+    placeholders = ", ".join(["?"] * len(alert_ids))
+    params = [payload.status.value, *alert_ids]
+
+    cur = db.execute(
+        f"UPDATE alerts SET status = ? WHERE alert_id IN ({placeholders})",
+        params,
+    )
+
+    return {"updated": cur.rowcount}

@@ -93,6 +93,31 @@ def test_alerts_filter_by_cik_and_date(tmp_path: Path) -> None:
     assert payload["items"][0]["anomaly_type"] == "NT_FILING"
 
 
+def test_alerts_summary_route_resolves_correct_handler(tmp_path: Path) -> None:
+    db_path = tmp_path / "test.db"
+    create_db(path=db_path, reset=False)
+
+    with get_conn(path=db_path) as conn:
+        upsert_company(conn, cik=9090, name="Summary Co", ticker="SUM", industry="Tech")
+        insert_filing(conn, "acc-9090-a", 9090, "8-K", "2026-02-20T10:00:00", "2026-02-20")
+        _insert_alert(
+            conn,
+            accession_id="acc-9090-a",
+            anomaly_type="NT_FILING",
+            severity_score=0.85,
+            dedupe_key="summary:9090:1",
+            created_at="2026-02-20 10:00:00",
+        )
+
+    client = _build_client(db_path)
+    response = client.get("/alerts/summary")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total"] == 1
+    assert payload["by_type"]["NT_FILING"] == 1
+
+
 def test_explain_contributors_match_alert_drilldown(tmp_path: Path) -> None:
     db_path = tmp_path / "test.db"
     create_db(path=db_path, reset=False)

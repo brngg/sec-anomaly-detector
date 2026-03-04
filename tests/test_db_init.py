@@ -94,6 +94,15 @@ def test_new_scoring_tables_created(tmp_path: Path) -> None:
     assert "issuer_risk_scores" in table_names
     assert "outcome_events" in table_names
 
+    conn = sqlite3.connect(db_path)
+    cols = conn.execute("PRAGMA table_info(outcome_events)").fetchall()
+    alert_cols = conn.execute("PRAGMA table_info(alerts)").fetchall()
+    conn.close()
+    col_names = {row[1] for row in cols}
+    alert_col_names = {row[1] for row in alert_cols}
+    assert {"form", "item", "accession_id", "filing_url", "verification_status", "verification_reason"} <= col_names
+    assert "event_at" in alert_col_names
+
 
 def test_upsert_feature_snapshot_and_risk_score(tmp_path: Path) -> None:
     db_path = tmp_path / "test.db"
@@ -199,7 +208,7 @@ def test_insert_outcome_event_dedup(tmp_path: Path) -> None:
     count = conn.execute("SELECT COUNT(*) FROM outcome_events WHERE cik = 777001").fetchone()[0]
     row = conn.execute(
         """
-        SELECT outcome_type, source, metadata
+        SELECT outcome_type, source, form, item, accession_id, filing_url, verification_status, metadata
         FROM outcome_events
         WHERE cik = 777001
         """
@@ -211,4 +220,71 @@ def test_insert_outcome_event_dedup(tmp_path: Path) -> None:
     assert count == 1
     assert row[0] == "RESTATEMENT_DISCLOSURE"
     assert row[1] == "SEC 8-K"
-    assert json.loads(row[2]) == {"form": "8-K", "item": "4.02"}
+    assert row[2] == "8-K"
+    assert row[3] == "4.02"
+    assert row[4] is None
+    assert row[5] is None
+    assert row[6] is None
+    assert json.loads(row[7]) == {"form": "8-K", "item": "4.02"}
+
+
+def test_create_db_migrates_existing_outcome_events_columns(tmp_path: Path) -> None:
+    db_path = tmp_path / "legacy.db"
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        """
+        CREATE TABLE outcome_events (
+            outcome_id INTEGER PRIMARY KEY,
+            cik INTEGER NOT NULL,
+            event_date TEXT NOT NULL,
+            outcome_type TEXT NOT NULL,
+            source TEXT,
+            description TEXT,
+            metadata TEXT NOT NULL DEFAULT '{}',
+            dedupe_key TEXT NOT NULL UNIQUE,
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO outcome_events (
+            cik, event_date, outcome_type, source, description, metadata, dedupe_key
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            123456,
+            "2026-03-01",
+            "RESTATEMENT_DISCLOSURE",
+            "legacy",
+            "legacy row",
+            '{"form":"8-K","item":"4.02","accession_id":"0001234567-26-000001","url":"https://www.sec.gov/x","verification_status":"VERIFIED_HIGH","verification_reason":"legacy"}',
+            "legacy:123456:2026-03-01",
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+    create_db(path=db_path, reset=False)
+
+    conn = sqlite3.connect(db_path)
+    cols = conn.execute("PRAGMA table_info(outcome_events)").fetchall()
+    row = conn.execute(
+        """
+        SELECT form, item, accession_id, filing_url, verification_status, verification_reason
+        FROM outcome_events
+        WHERE cik = 123456
+        """
+    ).fetchone()
+    conn.close()
+    col_names = {row[1] for row in cols}
+    assert {"form", "item", "accession_id", "filing_url", "verification_status", "verification_reason"} <= col_names
+    assert row == (
+        "8-K",
+        "4.02",
+        "0001234567-26-000001",
+        "https://www.sec.gov/x",
+        "VERIFIED_HIGH",
+        "legacy",
+    )

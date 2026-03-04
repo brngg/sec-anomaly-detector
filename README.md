@@ -51,9 +51,27 @@ git remote -v
 Backfill reads a company list from `data/companies.csv` by default (header: `ticker`).
 
 Environment variables:
+- `DB_BACKEND` - backend toggle: `postgres` or `sqlite`
+- `DATABASE_URL` - RW DSN when `DB_BACKEND=postgres` (Supabase pooler URL, `sslmode=require`)
+- `API_DATABASE_URL` - optional RO DSN when `DB_BACKEND=postgres`
 - `SEC_IDENTITY` - SEC identity string (recommended)
 - `COMPANIES_CSV` - Optional path to a custom CSV file
+- `BACKFILL_START_DATE` - optional explicit backfill start date (`YYYY-MM-DD`)
+- `BACKFILL_DAYS` - optional window in days when `BACKFILL_START_DATE` is unset (default `730`)
 - `DRY_RUN` - Set to `1` or `true` to skip DB writes while still fetching
+
+Backend toggle examples:
+```bash
+# Hosted/Supabase profile
+DB_BACKEND=postgres
+DATABASE_URL="postgresql://app_rw.<project_ref>:<password>@<pooler-host>:5432/postgres?sslmode=require"
+API_DATABASE_URL="postgresql://app_ro.<project_ref>:<password>@<pooler-host>:5432/postgres?sslmode=require"
+
+# Local file profile
+DB_BACKEND=sqlite
+unset DATABASE_URL
+unset API_DATABASE_URL
+```
 
 Quick smoke test (no DB writes):
 ```bash
@@ -64,6 +82,8 @@ MSFT
 AMZN
 EOF
 
+DB_BACKEND=postgres \
+DATABASE_URL="postgresql://app_rw:***@db.example.supabase.co:6543/postgres?sslmode=require" \
 COMPANIES_CSV=/tmp/companies_smoke.csv \
 DRY_RUN=1 \
 SEC_IDENTITY="Your Name you@example.com" \
@@ -71,8 +91,8 @@ python src/ingestion/backfill.py
 ```
 
 ## Polling
-GitHub Actions runs a daily full refresh pipeline (ingestion + analysis) and commits DB updates to
-`data/sec_anomaly.db`.
+GitHub Actions runs a daily full refresh pipeline (ingestion + analysis) against Supabase Postgres.
+No SQLite DB artifact is committed by the workflow.
 
 Workflow:
 - `.github/workflows/poll.yml`
@@ -81,14 +101,19 @@ Workflow:
 
 Run locally:
 ```bash
-DRY_RUN=1 SEC_IDENTITY="Your Name you@example.com" python src/ingestion/poll.py
+DB_BACKEND=postgres \
+DATABASE_URL="postgresql://app_rw:***@db.example.supabase.co:6543/postgres?sslmode=require" \
+DRY_RUN=1 \
+SEC_IDENTITY="Your Name you@example.com" \
+python src/ingestion/poll.py
 ```
 
 Optional polling flags:
 - `POLL_ENABLE_CATCHUP` - enable/disable stale-company catch-up (default `1`)
 - `POLL_ENABLE_RISK_SCORING` - run issuer risk scoring after detections when new filings are inserted (default `1`)
 - `POLL_ENABLE_INLINE_ANALYSIS` - run detections/scoring inside `poll.py` (default `1`)
-- `POLL_LOCK_PATH` - lock file path used to prevent overlapping poll runs (default `.poller.lock`)
+- `POLL_ADVISORY_LOCK_NAME` - Postgres advisory lock name used to prevent overlapping runs (default `sec-daily-refresh`)
+- `POLL_LOCK_PATH` - sqlite-only lock file path when `DB_BACKEND=sqlite` (default `.poller.lock`)
 - `POLL_LOCK_TIMEOUT_SECONDS` - lock acquire timeout; `0` means non-blocking exit when another run holds the lock
 
 ## Signal Detectors
@@ -119,10 +144,27 @@ python src/analysis/run_analysis.py
 To fully split ingestion from analysis in cron:
 ```bash
 # job 1: ingestion only
-POLL_ENABLE_INLINE_ANALYSIS=0 SEC_IDENTITY="Your Name you@example.com" python src/ingestion/poll.py
+DB_BACKEND=postgres \
+DATABASE_URL="postgresql://app_rw:***@db.example.supabase.co:6543/postgres?sslmode=require" \
+POLL_ENABLE_INLINE_ANALYSIS=0 \
+SEC_IDENTITY="Your Name you@example.com" \
+python src/ingestion/poll.py
 
 # job 2: analysis
-python src/analysis/run_analysis.py
+DB_BACKEND=postgres DATABASE_URL="postgresql://app_rw:***@db.example.supabase.co:6543/postgres?sslmode=require" python src/analysis/run_analysis.py
+```
+
+Historical score reconstruction (daily snapshots across 24 months):
+```bash
+DB_BACKEND=postgres \
+DATABASE_URL="postgresql://app_rw:***@db.example.supabase.co:6543/postgres?sslmode=require" \
+BACKFILL_DAYS=730 \
+python src/analysis/backfill_risk_scores.py
+```
+
+Pre-migration SQLite baseline export:
+```bash
+python scripts/export_sqlite_baseline.py --db-path data/sec_anomaly.db
 ```
 
 ## Review Priority API Endpoints
@@ -135,6 +177,8 @@ Compatibility note: endpoint paths remain `/risk/*` during this phase to avoid c
 
 ## Outcome Label Import + Evaluation
 ```bash
+python src/analysis/generate_outcome_candidates.py --output data/outcomes_candidates.csv
+python src/analysis/verify_outcomes.py --input data/outcomes_candidates.csv --review-output data/outcomes_reviewed.csv --verified-output data/outcomes.csv --min-confidence-for-export HIGH
 python src/analysis/import_outcomes.py --input data/outcomes.csv
 python src/analysis/evaluate_review_priority.py
 ```
@@ -179,12 +223,11 @@ PY
 
 ## Documentation
 - `docs/CodebaseSummary.md`
-- `docs/Methodology.md`
-- `docs/ReviewPriorityScoreSpec.md`
-- `docs/DashboardDataContract.md`
-- `docs/Backtesting.md`
-- `docs/DEMO_RUNBOOK.md`
+- `docs/Methodology.md` (optional deep dive)
+- `docs/Backtesting.md` (optional deep dive)
 - `docs/Week1.md` and `docs/Week2.md` (historical planning notes)
+
+Note: as of 2026-03-03, operational/runbook/spec details are unified in `docs/CodebaseSummary.md`.
 
 ## Project Structure
 ```text

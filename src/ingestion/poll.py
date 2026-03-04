@@ -42,6 +42,7 @@ FEED_BUFFER_HOURS = int(os.getenv("POLL_FEED_BUFFER_HOURS", "6"))
 SLEEP_SECONDS = float(os.getenv("POLL_SLEEP_SECONDS", "0.11"))
 LOCK_TIMEOUT_SECONDS = float(os.getenv("POLL_LOCK_TIMEOUT_SECONDS", "0"))
 LOCK_PATH = Path(os.getenv("POLL_LOCK_PATH", str(REPO_ROOT / ".poller.lock")))
+ADVISORY_LOCK_NAME = os.getenv("POLL_ADVISORY_LOCK_NAME", "sec-daily-refresh")
 
 try:
     from httpcore import ConnectTimeout as HTTPCoreConnectTimeout
@@ -443,12 +444,17 @@ def main() -> int:
 
     dry_run = _parse_bool(os.getenv("DRY_RUN", ""))
 
-    lock = FileLock(str(lock_path))
-    try:
-        lock.acquire(timeout=max(0.0, lock_timeout_seconds))
-    except FileLockTimeout:
-        print(f"Another poller instance is already running (lock={lock_path}). Exiting.")
-        return 0
+    lock_backend = os.getenv("DB_BACKEND", db_utils.BACKEND_POSTGRES).strip().lower()
+    file_lock: FileLock | None = None
+    advisory_lock_acquired = False
+
+    if lock_backend == db_utils.BACKEND_SQLITE:
+        file_lock = FileLock(str(lock_path))
+        try:
+            file_lock.acquire(timeout=max(0.0, lock_timeout_seconds))
+        except FileLockTimeout:
+            print(f"Another poller instance is already running (lock={lock_path}). Exiting.")
+            return 0
 
     try:
         start_time = datetime.now()
@@ -470,6 +476,15 @@ def main() -> int:
         }
 
         with db_utils.get_conn() as db_conn:
+            if db_utils.get_backend(db_conn) == db_utils.BACKEND_POSTGRES:
+                advisory_lock_acquired = db_utils.try_advisory_lock(db_conn, ADVISORY_LOCK_NAME)
+                if not advisory_lock_acquired:
+                    print(
+                        "Another poller instance is already running "
+                        f"(advisory_lock={ADVISORY_LOCK_NAME}). Exiting."
+                    )
+                    return 0
+
             _ensure_poll_state(db_conn)
             rows = db_conn.execute(
                 """
@@ -583,8 +598,10 @@ def main() -> int:
 
         return 0 if stats["total_errors"] == 0 else 1
     finally:
-        if lock.is_locked:
-            lock.release()
+        # Postgres advisory lock is session-scoped and is automatically released
+        # when the DB connection exits the context manager.
+        if file_lock and file_lock.is_locked:
+            file_lock.release()
 
 
 if __name__ == "__main__":

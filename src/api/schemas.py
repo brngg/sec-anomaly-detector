@@ -40,6 +40,7 @@ class Alert(BaseModel):
     details: Any
     status: AlertStatus
     dedupe_key: str
+    event_at: Optional[str] = None
     created_at: str
 
 
@@ -110,10 +111,56 @@ class AlertContribution(BaseModel):
     recency_weight: float
     weighted_severity: float
     contribution_proxy: float
+    event_at: Optional[str] = None
     created_at: str
     filing_type: Optional[str] = None
     filed_at: Optional[str] = None
     description: Optional[str] = None
+
+
+class RankStabilityThresholds(BaseModel):
+    top_quartile_rank_max: int
+    spike_min_rank_improvement: int
+
+
+class RankStabilityEvidence(BaseModel):
+    state: str
+    universe_size: int
+    rank_today: int
+    rank_1d_ago: Optional[int] = None
+    rank_delta_1d: Optional[int] = None
+    top_days_7d: int
+    best_rank_7d: int
+    worst_rank_7d: int
+    thresholds: RankStabilityThresholds
+
+
+class UncertaintyEvidence(BaseModel):
+    alert_count_90d: int
+    effective_alert_count_90d: float
+    signal_diversity: float
+    recent_weight_share_7d: float
+    confidence_score: float
+    uncertainty_band: str
+    formula: str
+
+
+class CalibrationMetadata(BaseModel):
+    status: str
+    artifact_path: Optional[str] = None
+    artifact_as_of_date: Optional[str] = None
+    artifact_age_days: Optional[int] = None
+    train_samples: Optional[int] = None
+    train_positives: Optional[int] = None
+    train_negatives: Optional[int] = None
+    min_class_support: Optional[int] = None
+    used_prior_fallback: Optional[bool] = None
+    artifact_schema_version: Optional[int] = None
+    warn_days: int
+    expire_days: int
+    error_code: Optional[str] = None
+    parse_errors_count: Optional[int] = None
+    parse_error_example: Optional[str] = None
 
 
 class ReviewPriorityEvidence(BaseModel):
@@ -129,8 +176,11 @@ class ReviewPriorityEvidence(BaseModel):
     component_breakdown: list[WindowComponentBreakdown] = Field(default_factory=list)
     score_math: dict[str, str | float | dict[str, float]] = Field(default_factory=dict)
     top_contributing_alerts_30d: list[AlertContribution] = Field(default_factory=list)
+    rank_stability: Optional[RankStabilityEvidence] = None
+    uncertainty: Optional[UncertaintyEvidence] = None
     reason_summary: Optional[str] = None
     calibrated_review_priority: Optional[float] = None
+    calibration_metadata: Optional[CalibrationMetadata] = None
     model_config = ConfigDict(extra="allow")
 
 

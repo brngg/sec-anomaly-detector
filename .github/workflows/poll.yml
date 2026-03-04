@@ -11,7 +11,7 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   daily-refresh:
@@ -31,6 +31,9 @@ jobs:
 
       - name: Run ingestion poller
         env:
+          DB_BACKEND: "postgres"
+          DATABASE_URL_RW: ${{ secrets.DATABASE_URL_RW }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL_RW }}
           SEC_IDENTITY: ${{ secrets.SEC_IDENTITY }}
           POLL_ENABLE_CATCHUP: "1"
           POLL_CATCHUP_DAYS: "2"
@@ -46,6 +49,9 @@ jobs:
 
       - name: Run analysis (detectors + risk scoring)
         env:
+          DB_BACKEND: "postgres"
+          DATABASE_URL_RW: ${{ secrets.DATABASE_URL_RW }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL_RW }}
           POLL_ENABLE_RISK_SCORING: "1"
         run: |
           date -u +"Analysis UTC start: %Y-%m-%dT%H:%M:%SZ"
@@ -53,33 +59,40 @@ jobs:
           date -u +"Analysis UTC end: %Y-%m-%dT%H:%M:%SZ"
 
       - name: Quality gate (risk scores must exist)
+        env:
+          DB_BACKEND: "postgres"
+          DATABASE_URL_RW: ${{ secrets.DATABASE_URL_RW }}
         run: |
           python - <<'PY'
-          import sqlite3
+          import os
           import sys
 
+          from src.db.db_utils import get_conn
+
+          dsn = os.getenv("DATABASE_URL_RW", "").strip()
+          if not dsn:
+              print("ERROR: DATABASE_URL_RW is not set", file=sys.stderr)
+              sys.exit(1)
+
           try:
-              conn = sqlite3.connect("data/sec_anomaly.db")
-              count = conn.execute("SELECT COUNT(*) FROM issuer_risk_scores").fetchone()[0]
-              conn.close()
-          except sqlite3.Error as exc:
+              with get_conn(path=None, backend="postgres", dsn=dsn) as conn:
+                  count = conn.execute("SELECT COUNT(*) AS count FROM issuer_risk_scores").fetchone()["count"]
+          except Exception as exc:
               print(f"ERROR: failed to query issuer_risk_scores: {exc}", file=sys.stderr)
               sys.exit(1)
 
           print(f"issuer_risk_scores rows: {count}")
-          if count <= 0:
+          if int(count) <= 0:
               print("ERROR: issuer_risk_scores is empty after analysis.", file=sys.stderr)
               sys.exit(1)
           PY
 
-      - name: Commit updated DB
-        run: |
-          if git diff --quiet -- data/sec_anomaly.db; then
-            echo "No DB changes"
-            exit 0
-          fi
-          git config user.name "sec-poller"
-          git config user.email "sec-poller@users.noreply.github.com"
-          git add data/sec_anomaly.db
-          git commit -m "Update SEC demo DB snapshot"
-          git push
+      - name: Upload validation artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: validation-reports
+          path: |
+            docs/reports/validation/**/*.json
+            docs/reports/validation/**/*.md
+          if-no-files-found: ignore

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sys
 from dataclasses import dataclass
+from datetime import date, datetime
 from pathlib import Path
 from typing import List, Optional, Tuple
 
@@ -55,6 +56,14 @@ def score_nt_filing(filing_type: str) -> float:
     return base.get(filing_type, DEFAULT_SEVERITY)
 
 
+def _stringify_temporal(value) -> str:
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    return str(value)
+
+
 def fetch_nt_filings(conn) -> List[NTFiling]:
     rows = conn.execute(
         """
@@ -78,8 +87,8 @@ def fetch_nt_filings(conn) -> List[NTFiling]:
             accession_id=row["accession_id"],
             cik=row["cik"],
             filing_type=row["filing_type"],
-            filed_at=row["filed_at"],
-            filed_date=row["filed_date"],
+            filed_at=_stringify_temporal(row["filed_at"]),
+            filed_date=_stringify_temporal(row["filed_date"]),
             company_name=row["company_name"],
             company_ticker=row["company_ticker"],
         )
@@ -111,6 +120,7 @@ def run_nt_detection() -> Tuple[int, int]:
                 severity_score=filing_severity,
                 description=description,
                 details=details,
+                event_at=nt_filing.filed_at,
             ):
                 inserted += 1
 

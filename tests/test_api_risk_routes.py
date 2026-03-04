@@ -62,6 +62,42 @@ def test_risk_top_defaults_to_latest_as_of_date(tmp_path: Path) -> None:
                 "window_scores": {"30": 0.9, "90": 0.8},
                 "calibrated_review_priority": 0.77,
                 "reason_summary": "Top drivers: NT_FILING, 8K_SPIKE.",
+                "rank_stability": {
+                    "state": "SPIKING_PRIORITY",
+                    "universe_size": 100,
+                    "rank_today": 1,
+                    "rank_1d_ago": 30,
+                    "rank_delta_1d": -29,
+                    "top_days_7d": 2,
+                    "best_rank_7d": 1,
+                    "worst_rank_7d": 30,
+                    "thresholds": {
+                        "top_quartile_rank_max": 25,
+                        "spike_min_rank_improvement": 15,
+                    },
+                },
+                "uncertainty": {
+                    "alert_count_90d": 3,
+                    "effective_alert_count_90d": 2.3,
+                    "signal_diversity": 0.66,
+                    "recent_weight_share_7d": 0.5,
+                    "confidence_score": 0.74,
+                    "uncertainty_band": "MEDIUM",
+                    "formula": "confidence=...",
+                },
+                "calibration_metadata": {
+                    "status": "APPLIED",
+                    "artifact_path": "/tmp/artifact.json",
+                    "artifact_as_of_date": "2026-02-23",
+                    "artifact_age_days": 0,
+                    "train_samples": 100,
+                    "used_prior_fallback": False,
+                    "artifact_schema_version": 1,
+                    "warn_days": 14,
+                    "expire_days": 30,
+                    "error_code": None,
+                    "parse_errors_count": 0,
+                },
             },
         )
         upsert_issuer_risk_score(
@@ -86,6 +122,8 @@ def test_risk_top_defaults_to_latest_as_of_date(tmp_path: Path) -> None:
     assert payload["items"][0]["company_ticker"] == "HRI"
     assert isinstance(payload["items"][0]["evidence"], dict)
     assert payload["items"][0]["calibrated_review_priority"] == 0.77
+    assert payload["items"][0]["evidence"]["rank_stability"]["state"] == "SPIKING_PRIORITY"
+    assert payload["items"][0]["evidence"]["uncertainty"]["uncertainty_band"] == "MEDIUM"
 
 
 def test_risk_history_and_explain(tmp_path: Path) -> None:

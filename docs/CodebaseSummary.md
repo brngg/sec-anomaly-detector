@@ -1,151 +1,187 @@
-# SEC Review Priority Monitor — Codebase Summary (Snapshot)
+# SEC Review Priority Monitor — Unified Codebase Summary
 
-**Date:** 2026-02-23  
-**Purpose:** Build an auditable, pre-enforcement review-priority monitor using public SEC filing data.
+**Last updated:** 2026-03-03
 
----
+## 1) What This Project Is
+- A public-data SEC filing triage system.
+- Output is a **Review Priority leaderboard** for issuers.
+- It helps answer: "Who should I review first today?"
 
-## Current State
-- Ingestion is production-like for MVP scope: backfill + hybrid poller + watermark tracking.
-- Event-level detectors are implemented and writing alerts.
-- Issuer-level review-priority scoring is implemented and persisted.
-- API endpoints exist for companies, filings, alerts, and risk outputs.
-- Runtime is now documented for a decoupled operating model:
-  - `poll.py` ingests filings only.
-  - `run_analysis.py` runs detectors and review-priority scoring separately.
+## 2) What It Is Not
+- Not fraud probability.
+- Not legal liability determination.
+- Not a credit/business quality score.
 
----
+## 3) How it works
+- Raw ranking is generated from filing anomaly signals and runs daily without outcome labels.
+- Outcome labels are only for validation and calibration claims.
+- If labels are sparse, leaderboard still works, but validation/calibration claims are weak.
 
-## Current Implemented Components
-- **DB schema:** `companies`, `filing_events`, `watermarks`, `poll_state`, `alerts`, `feature_snapshots`, `issuer_risk_scores`, `outcome_events`
-- **Ingestion:**
-  - `src/ingestion/backfill.py`
-  - `src/ingestion/poll.py`
-- **Detectors:**
-  - `src/detection/nt_detection.py`
-  - `src/detection/friday_detection.py`
-  - `src/detection/spike_8k_detection.py`
-  - shared alert helper in `src/detection/alerts.py`
-- **Detector runner:** `src/detection/run_all.py`
-- **Review-priority scoring:**
-  - `src/analysis/build_risk_scores.py`
-  - `src/analysis/run_analysis.py` (detectors + optional scoring entrypoint)
-- **API:** `src/api/main.py`, `src/api/routes/*`
-- **Notebook workflow:**
-  - `notebooks/01_signal_qc.ipynb`
-  - `notebooks/02_risk_backtest.ipynb`
+## 4) Workflows
+1. Ingestion (`src/ingestion/poll.py`) inserts new filings into `filing_events`.
+2. Detection (`src/detection/run_all.py`) creates event-level `alerts`.
+3. Scoring (`src/analysis/build_risk_scores.py`) writes issuer leaderboard rows into `issuer_risk_scores`.
+4. API (`src/api/routes/risk.py`) serves `/risk/top`, `/risk/{cik}/history`, `/risk/{cik}/explain`.
+5. Validation lane (optional but recommended) populates `outcome_events`, evaluates lift/precision/recall, and writes calibration artifacts.
 
----
+## 5) Two Operating Lanes (Important)
 
-## Data Model (Implemented)
-- **Database:** `data/sec_anomaly.db` (SQLite)
-- **Tables:**
-  - `companies` - issuer metadata
-  - `filing_events` - normalized filing event stream (dedupe by `accession_id`)
-  - `watermarks` - ingestion state per issuer (`last_seen_filed_at`, run metadata)
-  - `poll_state` - poller control state (`last_poll_at`, `last_catchup_at`)
-  - `alerts` - event-level detector outputs (`dedupe_key` unique)
-  - `feature_snapshots` - issuer lookback window features
-  - `issuer_risk_scores` - issuer score/rank/percentile snapshots
-  - `outcome_events` - optional forward validation labels
+Backend profile (set once per shell before running lane commands):
 
----
-
-## Runtime Architecture (Decoupled)
-
-### 1) Ingestion Runtime (`src/ingestion/poll.py`)
-**Intended scope in decoupled mode:**
-- Pull current SEC feed pages and insert matching filings.
-- Run stale-company catch-up for issuers with old/missing watermark state.
-- Update `watermarks` and `poll_state`.
-- Exit without running detector/scoring logic.
-
-**How to enforce ingestion-only behavior:**
-- Set `POLL_ENABLE_INLINE_ANALYSIS=0`.
-- Keep detector/scoring execution in a separate scheduled step (`run_analysis.py`).
-- Note: code default is still `POLL_ENABLE_INLINE_ANALYSIS=1` for backward compatibility; deployment config must override to `0` for strict decoupling.
-
-**Operational safeguards now in place:**
-- File lock to prevent concurrent pollers:
-  - `POLL_LOCK_PATH` (default `.poller.lock`)
-  - `POLL_LOCK_TIMEOUT_SECONDS` (default `0`, non-blocking)
-- Incremental commits:
-  - Per feed page commit checkpoint.
-  - Per company catch-up commit checkpoint.
-  - Poll state commit after catch-up marker update.
-- This reduces lost progress if a run is interrupted.
-
-### 2) Analysis Runtime (`src/analysis/run_analysis.py`)
-**Scope:**
-- Run all anomaly detectors (`run_all_detections`).
-- Run issuer risk scoring (`run_risk_scoring`) unless disabled.
-
-**Flag behavior:**
-- Uses `POLL_ENABLE_RISK_SCORING` to gate risk scoring.
-- Does not ingest filings.
-
----
-
-## Decoupled Scheduling Contract
-
-### Recommended execution order
-1. Ingestion job runs first (`poll.py` with `POLL_ENABLE_INLINE_ANALYSIS=0`).
-2. Analysis job runs after ingestion completes (same schedule or staggered schedule).
-
-### Why this split is preferred
-- Prevents ingestion failures from being caused by detector/scoring regressions.
-- Limits job runtime variance for the ingestion path.
-- Reduces overlap risk and duplicate external calls in cron/scheduler environments.
-- Creates clearer failure domains and easier retry semantics.
-
-### Example CLI model
 ```bash
-# ingestion only
-POLL_ENABLE_INLINE_ANALYSIS=0 SEC_IDENTITY="Your Name you@example.com" python src/ingestion/poll.py
+# Hosted/Supabase profile
+export DB_BACKEND=postgres
+export DATABASE_URL="postgresql://app_rw.<project_ref>:<password>@<pooler-host>:5432/postgres?sslmode=require"
+export API_DATABASE_URL="postgresql://app_ro.<project_ref>:<password>@<pooler-host>:5432/postgres?sslmode=require"
 
-# analysis only
-python src/analysis/run_analysis.py
+# Local file profile
+# export DB_BACKEND=sqlite
+# unset DATABASE_URL
+# unset API_DATABASE_URL
 ```
 
----
+### Lane A: Daily Leaderboard (production path)
+Use this to keep leaderboard fresh. This is your primary workflow.
 
-## Environment Variables (Operationally Relevant)
+```bash
+# step 1: ingest only
+POLL_ENABLE_INLINE_ANALYSIS=0 SEC_IDENTITY="Your Name you@example.com" ./venv/bin/python src/ingestion/poll.py
 
-### Ingestion (`poll.py`)
-- `SEC_IDENTITY` - SEC API identity string (required in non-dry runs).
-- `DRY_RUN` - if truthy, skips DB writes.
-- `POLL_ENABLE_INLINE_ANALYSIS` - set `0` for strict decoupling.
-- `POLL_ENABLE_CATCHUP` - enable stale watermark catch-up path.
-- `POLL_CATCHUP_DAYS` - stale threshold window.
-- `POLL_CATCHUP_COOLDOWN_HOURS` - cooldown between catch-up sweeps.
-- `POLL_CURRENT_PAGE_SIZE` - current filings page size.
-- `POLL_FEED_BUFFER_HOURS` - buffer when deriving feed cutoff.
-- `POLL_LOOKBACK_DAYS` - fallback lookback when watermark missing.
-- `POLL_LOCK_PATH` - file lock location for singleton execution.
-- `POLL_LOCK_TIMEOUT_SECONDS` - lock wait duration before graceful exit.
+# step 2: run analysis
+./venv/bin/python src/analysis/run_analysis.py
+```
 
-### Analysis (`run_analysis.py`)
-- `POLL_ENABLE_RISK_SCORING` - if `0`, detectors run but risk scoring is skipped.
+What this updates:
+- `filing_events`
+- `alerts`
+- `feature_snapshots`
+- `issuer_risk_scores`
 
----
+How users consume it:
+- `GET /risk/top` (leaderboard)
+- `GET /risk/{cik}/explain` (evidence drilldown)
 
-## Failure and Recovery Semantics
-- If ingestion fails mid-run, incremental commits keep already-processed work.
-- Watermark run status is updated per issuer (`SUCCESS`/`FAIL`) in `watermarks`.
-- Lock contention returns a clean exit in ingestion (`poll.py`) rather than overlapping work.
-- If analysis fails, ingestion state remains preserved; analysis can be retried independently.
+### Lane B: Validation + Calibration (weekly/periodic)
+Use this to test defensibility of ranking claims.
 
----
+```bash
+# 1) generate likely adverse candidates
+SEC_IDENTITY="Your Name you@example.com" ./venv/bin/python src/analysis/generate_outcome_candidates.py \
+  --output data/outcomes_candidates.csv \
+  --min-confidence MEDIUM
 
-## Evidence and Claims Boundary
-- System output is for triage and prioritization.
-- It does not assert legal conclusions.
-- Performance claims should be framed as forward predictive association (for example precision at K, lift), not causal proof.
+# 2) verify against SEC filing text
+SEC_IDENTITY="Your Name you@example.com" ./venv/bin/python src/analysis/verify_outcomes.py \
+  --input data/outcomes_candidates.csv \
+  --review-output data/outcomes_reviewed.csv \
+  --verified-output data/outcomes.csv \
+  --min-confidence-for-export HIGH
 
----
+# 3) import labels
+./venv/bin/python src/analysis/import_outcomes.py --input data/outcomes.csv --min-confidence HIGH
 
-## Near-Term Priorities
-1. Update scheduler/workflow defaults to enforce decoupled mode in production (`POLL_ENABLE_INLINE_ANALYSIS=0`).
-2. Add explicit analysis scheduling cadence and alerting for failed analysis runs.
-3. Add integration tests for decoupled polling + analysis orchestration.
-4. Add reproducible evaluation reports for interview-ready evidence.
+# 4) evaluate strict + broad tracks
+./venv/bin/python src/analysis/evaluate_review_priority.py \
+  --output-dir docs/reports/validation \
+  --emit-confidence-splits
+```
+
+Validation tracks:
+- **STRICT:** `VERIFIED_HIGH`
+- **BROAD:** `VERIFIED_HIGH + VERIFIED_MEDIUM`
+
+## 6) Current Data Model
+Database backend is runtime-selectable via `DB_BACKEND`:
+- `postgres`: external Postgres/Supabase source-of-truth
+- `sqlite`: local file mode (`data/sec_anomaly.db`)
+
+- `companies`: issuer metadata
+- `filing_events`: normalized filings (dedupe by `accession_id`)
+- `watermarks`: ingestion state per issuer
+- `poll_state`: poller runtime markers
+- `alerts`: detector outputs with unique `dedupe_key`
+- `feature_snapshots`: scoring features by issuer/date/lookback
+- `issuer_risk_scores`: leaderboard rows (score, rank, percentile, evidence)
+- `outcome_events`: optional forward outcomes for validation/calibration
+
+Key note:
+- `outcome_events` is not required for leaderboard generation.
+
+## 7) Scoring Summary (v1)
+Model version: `v1_alert_composite`
+
+Signals used:
+- `NT_FILING`
+- `FRIDAY_BURYING`
+- `8K_SPIKE`
+
+Scoring approach:
+- recency decay (30-day half-life)
+- two windows (30d, 90d)
+- weighted aggregation into `risk_score` in `[0,1]`
+- deterministic ordering by rank/score/cik
+
+Evidence payload includes:
+- component math and top contributors
+- rank stability diagnostics
+- uncertainty band
+- optional calibrated score + calibration metadata
+
+## 8) API Contract (What Frontend Needs)
+Primary endpoints:
+- `GET /risk/top`
+- `GET /risk/{cik}/history`
+- `GET /risk/{cik}/explain`
+- `GET /alerts` (filters for drilldown)
+
+Essential leaderboard fields:
+- `cik`, `company_name`, `company_ticker`
+- `risk_score`, `risk_rank`, `percentile`
+- `calibrated_review_priority` (nullable)
+- `as_of_date`, `model_version`
+
+## 9) Operational Environment Variables
+Database backend:
+- `DB_BACKEND` (`postgres` or `sqlite`)
+- `DATABASE_URL` (required for `postgres` job/runtime writes)
+- `API_DATABASE_URL` (optional read-only DSN for API runtime in `postgres` mode)
+
+Hosted profile (Supabase):
+- Use `DB_BACKEND=postgres` with pooler DSNs.
+- Scheduler remains GitHub Actions (`.github/workflows/poll.yml`) with secrets:
+  - `DATABASE_URL_RW`
+  - `DATABASE_URL_RO` (optional)
+  - `SEC_IDENTITY`
+
+Ingestion:
+- `SEC_IDENTITY`
+- `POLL_ENABLE_INLINE_ANALYSIS` (set `0` for decoupled mode)
+- `POLL_ENABLE_CATCHUP`
+- `POLL_ADVISORY_LOCK_NAME` (Postgres advisory lock key)
+- `POLL_LOCK_PATH`, `POLL_LOCK_TIMEOUT_SECONDS` (sqlite file-lock settings)
+
+Analysis:
+- `POLL_ENABLE_RISK_SCORING` (controls scoring inside `run_analysis.py`)
+
+Validation fetchers:
+- `SEC_IDENTITY` for candidate generation and verification
+
+## 10) Common Failure Modes and Meaning
+- No rows in `/risk/top`: analysis lane did not run or no alerts/scores written.
+- Many `FETCH_ERROR` in verification: SEC retrieval/path/network issue.
+- All validation metrics at `0.0`: label yield/coverage is too sparse for claims.
+- Calibration unavailable in evidence: missing/stale/insufficient calibration artifacts.
+
+## 11) Practical Recommendation for Current Stage
+- Ship and operate **Lane A** daily for a functioning leaderboard.
+- Run **Lane B** weekly to accumulate evidence.
+- Keep claims scoped to triage until strict/broad coverage is healthy.
+
+## 12) Legacy Docs Status (Consolidated Here)
+The following docs were split views of the same system and are now consolidated into this file:
+- `docs/DashboardDataContract.md`
+- `docs/DEMO_RUNBOOK.md`
+- `docs/OutcomeLabels.md`
+- `docs/ReviewPriorityScoreSpec.md`
+
+They are retained as lightweight pointers for backward links only.

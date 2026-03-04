@@ -2,7 +2,7 @@ import csv
 import os
 import sys
 import time
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
@@ -74,7 +74,7 @@ def fetch_company(ticker: str) -> Company:
     reraise=True,
 )
 def fetch_filings(company: Company, date_filter: str):
-        return company.get_filings(
+    return company.get_filings(
         form=[
             "8-K",
             "10-K",
@@ -107,12 +107,23 @@ def main() -> int:
 
     dry_run = _parse_bool(os.getenv("DRY_RUN", ""))
 
-    six_months_ago = datetime.now() - timedelta(days=180)
-    date_filter = f"{six_months_ago.strftime('%Y-%m-%d')}:"
+    backfill_start_date_raw = (os.getenv("BACKFILL_START_DATE") or "").strip()
+    backfill_days_raw = (os.getenv("BACKFILL_DAYS") or "").strip()
+
+    if backfill_start_date_raw:
+        start_date = date.fromisoformat(backfill_start_date_raw).isoformat()
+    else:
+        backfill_days = int(backfill_days_raw) if backfill_days_raw else 730
+        if backfill_days <= 0:
+            raise ValueError("BACKFILL_DAYS must be positive when provided.")
+        start_date = (datetime.now(timezone.utc).date() - timedelta(days=backfill_days)).isoformat()
+
+    date_filter = f"{start_date}:"
 
     total = len(tickers)
     start_time = datetime.now()
     print(f"Starting backfill at {start_time.isoformat()}")
+    print(f"Backfill start date: {start_date}")
     print(f"Companies: {total} | Dry run: {dry_run}")
 
     total_fetched = 0
@@ -124,8 +135,17 @@ def main() -> int:
         start = datetime.now()
 
         company = fetch_company(ticker)
+        company_registered = False
 
         if not dry_run:
+            db_utils.upsert_company(
+                conn,
+                cik=company.cik,
+                name=company.name,
+                ticker=ticker,
+                industry=company.industry,
+            )
+            company_registered = True
             db_utils.update_watermark(
                 conn,
                 cik=company.cik,
@@ -135,15 +155,6 @@ def main() -> int:
             )
 
         try:
-            if not dry_run:
-                db_utils.upsert_company(
-                    conn,
-                    company.cik,
-                    company.name,
-                    ticker,
-                    company.industry,
-                )
-
             filings = fetch_filings(company, date_filter)
 
             fetched = 0
@@ -171,7 +182,7 @@ def main() -> int:
                 )
                 inserted += conn.total_changes - before
         except Exception as e:
-            if not dry_run:
+            if not dry_run and company_registered:
                 db_utils.update_watermark(
                     conn,
                     cik=company.cik,
@@ -185,7 +196,7 @@ def main() -> int:
         duration = (end - start).total_seconds()
         print(f"  -> fetched={fetched} inserted={inserted} duration={duration:.2f}s")
 
-        if not dry_run:
+        if not dry_run and company_registered:
             db_utils.update_watermark(
                 conn,
                 cik=company.cik,

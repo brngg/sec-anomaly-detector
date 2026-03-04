@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import sqlite3
-
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from ..deps import get_db
@@ -16,7 +14,7 @@ router = APIRouter(tags=["companies"])
 def list_companies(
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
-    db: sqlite3.Connection = Depends(get_db),
+    db=Depends(get_db),
 ) -> CompanyList:
     total = db.execute("SELECT COUNT(*) AS count FROM companies").fetchone()["count"]
 
@@ -37,7 +35,7 @@ def list_companies(
 @router.get("/companies/{cik}", response_model=Company)
 def get_company(
     cik: int,
-    db: sqlite3.Connection = Depends(get_db),
+    db=Depends(get_db),
 ) -> Company:
     row = db.execute(
         """

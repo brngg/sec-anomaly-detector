@@ -6,7 +6,14 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from src.analysis.build_risk_scores import LOOKBACK_WINDOWS, MODEL_VERSION, run_risk_scoring
+from src.analysis import calibration_utils
+from src.analysis.build_risk_scores import (
+    LOOKBACK_WINDOWS,
+    MODEL_VERSION,
+    _calculate_confidence_score,
+    _classify_rank_stability,
+    run_risk_scoring,
+)
 from src.db.db_utils import get_conn, insert_filing, upsert_company
 from src.db.init_db import create_db
 
@@ -18,6 +25,7 @@ def _insert_alert(
     severity_score: float,
     created_at: str,
     dedupe_key: str,
+    event_at: str | None = None,
 ) -> None:
     conn.execute(
         """
@@ -29,9 +37,10 @@ def _insert_alert(
             details,
             status,
             dedupe_key,
+            event_at,
             created_at
         )
-        VALUES (?, ?, ?, ?, ?, 'OPEN', ?, ?)
+        VALUES (?, ?, ?, ?, ?, 'OPEN', ?, ?, ?)
         """,
         (
             accession_id,
@@ -40,6 +49,7 @@ def _insert_alert(
             f"{anomaly_type} synthetic test event",
             "{}",
             dedupe_key,
+            event_at,
             created_at,
         ),
     )
@@ -141,7 +151,18 @@ def test_run_risk_scoring_builds_ranked_scores(tmp_path: Path) -> None:
     assert "component_breakdown" in evidence
     assert "score_math" in evidence
     assert "top_contributing_alerts_30d" in evidence
+    assert "rank_stability" in evidence
+    assert "uncertainty" in evidence
+    assert "calibration_metadata" in evidence
     assert isinstance(evidence["top_contributing_alerts_30d"], list)
+    assert evidence["rank_stability"]["state"] in {
+        "NEW_PRIORITY",
+        "SPIKING_PRIORITY",
+        "PERSISTENT_PRIORITY",
+        "STABLE_PRIORITY",
+    }
+    assert evidence["uncertainty"]["uncertainty_band"] in {"LOW", "MEDIUM", "HIGH"}
+    assert isinstance(evidence["calibration_metadata"]["status"], str)
     if evidence["top_contributing_alerts_30d"]:
         contributor = evidence["top_contributing_alerts_30d"][0]
         assert "alert_id" in contributor
@@ -209,6 +230,40 @@ def test_out_of_range_severity_raises(tmp_path: Path) -> None:
         run_risk_scoring(path=db_path, as_of_date="2026-02-23")
 
 
+def test_event_time_recency_uses_event_at_not_created_at(tmp_path: Path) -> None:
+    db_path = tmp_path / "test.db"
+    create_db(path=db_path, reset=False)
+
+    with get_conn(path=db_path) as conn:
+        upsert_company(conn, cik=3501, name="Old Event Co", ticker="OLD", industry="Tech")
+        insert_filing(conn, "acc-3501-a", 3501, "8-K", "2025-01-01T10:00:00+00:00", "2025-01-01")
+        _insert_alert(
+            conn,
+            accession_id="acc-3501-a",
+            anomaly_type="NT_FILING",
+            severity_score=0.95,
+            created_at="2026-02-22T10:00:00+00:00",
+            event_at="2025-01-01T10:00:00+00:00",
+            dedupe_key="test:3501:old-event",
+        )
+
+    stats = run_risk_scoring(path=db_path, as_of_date="2026-02-23")
+    assert stats["source_alerts"] == 0
+
+    with get_conn(path=db_path) as conn:
+        row = conn.execute(
+            """
+            SELECT risk_score
+            FROM issuer_risk_scores
+            WHERE cik = 3501 AND as_of_date = '2026-02-23' AND model_version = ?
+            """,
+            (MODEL_VERSION,),
+        ).fetchone()
+
+    assert row is not None
+    assert row["risk_score"] == 0.0
+
+
 def test_score_is_monotonic_with_additional_alerts(tmp_path: Path) -> None:
     db_path = tmp_path / "test.db"
     create_db(path=db_path, reset=False)
@@ -258,3 +313,111 @@ def test_score_is_monotonic_with_additional_alerts(tmp_path: Path) -> None:
         ).fetchone()["risk_score"]
 
     assert second_score >= first_score
+
+
+def test_uncertainty_formula_boundaries() -> None:
+    medium_score, medium_band = _calculate_confidence_score(
+        effective_alert_count=0.0,
+        signal_diversity=1.0,
+        recent_weight_share_7d=1.0,
+    )
+    assert medium_score == pytest.approx(0.45)
+    assert medium_band == "MEDIUM"
+
+    high_score, high_band = _calculate_confidence_score(
+        effective_alert_count=5.0,
+        signal_diversity=(2.0 / 3.0),
+        recent_weight_share_7d=0.0,
+    )
+    assert high_score == pytest.approx(0.75)
+    assert high_band == "HIGH"
+
+    low_score, low_band = _calculate_confidence_score(
+        effective_alert_count=0.0,
+        signal_diversity=0.0,
+        recent_weight_share_7d=0.0,
+    )
+    assert low_score == pytest.approx(0.0)
+    assert low_band == "LOW"
+
+
+def test_rank_stability_thresholds_small_and_large_universe() -> None:
+    small = _classify_rank_stability(
+        cik=9001,
+        rank_today=10,
+        prior_ranks={9001: {"2026-02-22": 18}},
+        as_of_date="2026-02-23",
+        universe_size=40,
+    )
+    assert small["state"] == "SPIKING_PRIORITY"
+    assert small["thresholds"]["spike_min_rank_improvement"] == 6
+    assert small["thresholds"]["top_quartile_rank_max"] == 10
+
+    large = _classify_rank_stability(
+        cik=9002,
+        rank_today=100,
+        prior_ranks={9002: {"2026-02-22": 180}},
+        as_of_date="2026-02-23",
+        universe_size=400,
+    )
+    assert large["state"] == "SPIKING_PRIORITY"
+    assert large["thresholds"]["spike_min_rank_improvement"] == 60
+    assert large["thresholds"]["top_quartile_rank_max"] == 100
+
+    new_priority = _classify_rank_stability(
+        cik=9003,
+        rank_today=50,
+        prior_ranks={},
+        as_of_date="2026-02-23",
+        universe_size=200,
+    )
+    assert new_priority["state"] == "NEW_PRIORITY"
+
+
+def test_calibration_unavailable_keeps_raw_ranking(tmp_path: Path) -> None:
+    db_path = tmp_path / "test.db"
+    calibration_dir = tmp_path / "missing_calibration_dir"
+    create_db(path=db_path, reset=False)
+
+    with get_conn(path=db_path) as conn:
+        upsert_company(conn, cik=9101, name="Higher Raw", ticker="HRW", industry="Tech")
+        upsert_company(conn, cik=9102, name="Lower Raw", ticker="LRW", industry="Tech")
+        insert_filing(conn, "acc-9101-a", 9101, "8-K", "2026-02-22T10:00:00", "2026-02-22")
+        insert_filing(conn, "acc-9102-a", 9102, "8-K", "2026-02-22T10:00:00", "2026-02-22")
+        _insert_alert(
+            conn,
+            accession_id="acc-9101-a",
+            anomaly_type="NT_FILING",
+            severity_score=0.95,
+            created_at="2026-02-22 10:00:00",
+            dedupe_key="test:9101:nt",
+        )
+        _insert_alert(
+            conn,
+            accession_id="acc-9102-a",
+            anomaly_type="FRIDAY_BURYING",
+            severity_score=0.20,
+            created_at="2026-02-22 10:00:00",
+            dedupe_key="test:9102:friday",
+        )
+
+    run_risk_scoring(path=db_path, as_of_date="2026-02-23", calibration_dir=calibration_dir)
+
+    with get_conn(path=db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT cik, risk_score, risk_rank, evidence
+            FROM issuer_risk_scores
+            WHERE as_of_date = '2026-02-23' AND model_version = ?
+            ORDER BY risk_rank ASC
+            """,
+            (MODEL_VERSION,),
+        ).fetchall()
+
+    assert rows[0]["cik"] == 9101
+    assert rows[0]["risk_score"] > rows[1]["risk_score"]
+
+    for row in rows:
+        evidence = json.loads(row["evidence"])
+        assert evidence["calibrated_review_priority"] is None
+        assert evidence["calibration_metadata"]["status"] == calibration_utils.STATUS_MISSING_ARTIFACT

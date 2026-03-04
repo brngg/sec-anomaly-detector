@@ -9,7 +9,7 @@ import subprocess
 import sys
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from statistics import mean
 from typing import Any, Iterable, Mapping
@@ -22,12 +22,14 @@ if __package__ in {None, ""}:
 from src.db import db_utils
 
 DEFAULT_MODEL_VERSION = "v1_alert_composite"
+CALIBRATION_ARTIFACT_SCHEMA_VERSION = 1
 DEFAULT_OUTCOME_TYPES = ("RESTATEMENT_DISCLOSURE",)
 DEFAULT_HORIZON_DAYS = 90
 DEFAULT_K_VALUES = (10, 20, 50)
 DEFAULT_BOOTSTRAP_SAMPLES = 300
 DEFAULT_RANDOM_SEED = 7
 DEFAULT_MIN_CALIBRATION_SAMPLES = 30
+DEFAULT_MIN_CLASS_SUPPORT = 5
 
 
 @dataclass(frozen=True)
@@ -134,21 +136,36 @@ def _fetch_positive_ciks(
     as_of_date: str,
     horizon_days: int,
     outcome_types: Iterable[str],
+    verification_statuses: Iterable[str] | None = None,
 ) -> set[int]:
     outcome_types = tuple(outcome_types)
     if not outcome_types:
         return set()
 
     placeholders = ",".join("?" * len(outcome_types))
+    where_status = ""
+    horizon_end = (date.fromisoformat(as_of_date) + timedelta(days=horizon_days)).isoformat()
+    params: list[object] = [as_of_date, horizon_end, *outcome_types]
+    normalized_statuses = tuple(
+        status.strip().upper()
+        for status in (verification_statuses or ())
+        if status and status.strip()
+    )
+    if normalized_statuses:
+        status_placeholders = ",".join("?" * len(normalized_statuses))
+        where_status = f" AND UPPER(COALESCE(verification_status, '')) IN ({status_placeholders})"
+        params.extend(normalized_statuses)
+
     rows = conn.execute(
         f"""
         SELECT DISTINCT cik
         FROM outcome_events
         WHERE event_date > ?
-          AND event_date <= date(?, ?)
+          AND event_date <= ?
           AND outcome_type IN ({placeholders})
+          {where_status}
         """,
-        (as_of_date, as_of_date, f"+{horizon_days} days", *outcome_types),
+        tuple(params),
     ).fetchall()
     return {int(row["cik"]) for row in rows}
 
@@ -293,6 +310,7 @@ def _build_markdown_report(summary: Mapping[str, Any]) -> str:
         f"- As-of dates evaluated: {summary['as_of_dates_evaluated']}",
         f"- Outcome window (days): {summary['horizon_days']}",
         f"- Outcome types: {', '.join(summary['outcome_types'])}",
+        f"- Verification statuses: {', '.join(summary.get('verification_statuses', [])) or 'ALL'}",
         f"- Commit SHA: {summary['commit_sha']}",
         "",
         "## Aggregate Metrics (mean across as-of dates)",
@@ -322,9 +340,10 @@ def _build_markdown_report(summary: Mapping[str, Any]) -> str:
 
 
 def evaluate_review_priority(
-    path: Path = db_utils.DB_PATH,
+    path: Path | None = None,
     model_version: str = DEFAULT_MODEL_VERSION,
     outcome_types: Iterable[str] = DEFAULT_OUTCOME_TYPES,
+    verification_statuses: Iterable[str] | None = None,
     horizon_days: int = DEFAULT_HORIZON_DAYS,
     k_values: Iterable[int] = DEFAULT_K_VALUES,
     date_from: str | None = None,
@@ -332,9 +351,16 @@ def evaluate_review_priority(
     bootstrap_samples: int = DEFAULT_BOOTSTRAP_SAMPLES,
     random_seed: int = DEFAULT_RANDOM_SEED,
     min_calibration_samples: int = DEFAULT_MIN_CALIBRATION_SAMPLES,
+    min_class_support: int = DEFAULT_MIN_CLASS_SUPPORT,
     output_dir: Path | None = None,
+    report_label: str | None = None,
 ) -> dict[str, Any]:
     outcome_types = tuple(outcome_types)
+    verification_statuses = tuple(
+        status.strip().upper()
+        for status in (verification_statuses or ())
+        if status and status.strip()
+    )
     k_values = tuple(sorted(set(int(k) for k in k_values if int(k) > 0)))
 
     with db_utils.get_conn(path=path) as conn:
@@ -362,6 +388,7 @@ def evaluate_review_priority(
                 as_of_date=as_of,
                 horizon_days=horizon_days,
                 outcome_types=outcome_types,
+                verification_statuses=verification_statuses,
             )
             scored_ciks = {row.cik for row in rows}
             positives = {cik for cik in positives if cik in scored_ciks}
@@ -378,8 +405,15 @@ def evaluate_review_priority(
                 "random": random_rank,
             }
 
+            train_positives = sum(1 for label in calibration_train_labels if label == 1)
+            train_negatives = len(calibration_train_labels) - train_positives
+            enough_training = len(calibration_train_scores) >= min_calibration_samples
+            enough_class_support = (
+                train_positives >= min_class_support and train_negatives >= min_class_support
+            )
+
             calibration_model: list[dict[str, float]] = []
-            if len(calibration_train_scores) >= min_calibration_samples:
+            if enough_training and enough_class_support:
                 calibration_model = _fit_isotonic(calibration_train_scores, calibration_train_labels)
 
             calibrated_scores = {
@@ -390,6 +424,10 @@ def evaluate_review_priority(
                 {
                     "as_of_date": as_of,
                     "train_samples": len(calibration_train_scores),
+                    "train_positives": train_positives,
+                    "train_negatives": train_negatives,
+                    "min_class_support": min_class_support,
+                    "class_support_ok": enough_class_support,
                     "used_isotonic": bool(calibration_model),
                     "isotonic_blocks": calibration_model,
                     "calibrated_scores": calibrated_scores,
@@ -464,9 +502,13 @@ def evaluate_review_priority(
     summary: dict[str, Any] = {
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
         "model_version": model_version,
+        "calibration_artifact_schema_version": CALIBRATION_ARTIFACT_SCHEMA_VERSION,
         "horizon_days": horizon_days,
         "k_values": list(k_values),
         "outcome_types": list(outcome_types),
+        "verification_statuses": list(verification_statuses),
+        "min_calibration_samples": min_calibration_samples,
+        "min_class_support": min_class_support,
         "as_of_dates_evaluated": len({row["as_of_date"] for row in metric_rows}),
         "rows_evaluated": len(metric_rows),
         "aggregate_metrics": sorted(aggregate_metrics, key=lambda row: (row["k"], row["method"])),
@@ -478,15 +520,17 @@ def evaluate_review_priority(
     if output_dir is not None:
         reports_dir, calibration_dir = _ensure_output_paths(output_dir)
         stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        suffix = f"_{report_label}" if report_label else ""
 
-        report_json_path = reports_dir / f"review_priority_validation_{stamp}.json"
-        report_md_path = reports_dir / f"review_priority_validation_{stamp}.md"
-        calibration_path = calibration_dir / f"isotonic_calibration_{stamp}.json"
+        report_json_path = reports_dir / f"review_priority_validation_{stamp}{suffix}.json"
+        report_md_path = reports_dir / f"review_priority_validation_{stamp}{suffix}.md"
+        calibration_path = calibration_dir / f"isotonic_calibration_{stamp}{suffix}.json"
 
         report_json_path.write_text(json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8")
         report_md_path.write_text(_build_markdown_report(summary), encoding="utf-8")
         calibration_payload = {
             "generated_at_utc": summary["generated_at_utc"],
+            "artifact_schema_version": CALIBRATION_ARTIFACT_SCHEMA_VERSION,
             "model_version": model_version,
             "horizon_days": horizon_days,
             "calibration": calibration_artifacts,
@@ -502,12 +546,21 @@ def evaluate_review_priority(
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Evaluate review-priority ranking with walk-forward metrics.")
-    parser.add_argument("--db-path", default=str(db_utils.DB_PATH), help="SQLite DB path")
+    parser.add_argument(
+        "--db-path",
+        default=None,
+        help="Optional sqlite DB path override. Leave unset to use DB_BACKEND + DATABASE_URL env.",
+    )
     parser.add_argument("--model-version", default=DEFAULT_MODEL_VERSION, help="Scoring model version")
     parser.add_argument(
         "--outcome-types",
         default=",".join(DEFAULT_OUTCOME_TYPES),
         help="Comma-separated outcome types",
+    )
+    parser.add_argument(
+        "--verification-statuses",
+        default="",
+        help="Optional comma-separated verification statuses to include (e.g. VERIFIED_HIGH,VERIFIED_MEDIUM)",
     )
     parser.add_argument("--horizon-days", type=int, default=DEFAULT_HORIZON_DAYS)
     parser.add_argument("--k-values", default=",".join(str(k) for k in DEFAULT_K_VALUES))
@@ -516,20 +569,31 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--bootstrap-samples", type=int, default=DEFAULT_BOOTSTRAP_SAMPLES)
     parser.add_argument("--random-seed", type=int, default=DEFAULT_RANDOM_SEED)
     parser.add_argument("--min-calibration-samples", type=int, default=DEFAULT_MIN_CALIBRATION_SAMPLES)
+    parser.add_argument("--min-class-support", type=int, default=DEFAULT_MIN_CLASS_SUPPORT)
     parser.add_argument(
         "--output-dir",
         default=str(Path(__file__).resolve().parents[2] / "docs" / "reports"),
         help="Directory for validation reports/artifacts",
+    )
+    parser.add_argument(
+        "--emit-confidence-splits",
+        action="store_true",
+        help="Also emit strict/broad evaluation tracks based on verification status",
     )
     return parser
 
 
 def main() -> int:
     args = _build_parser().parse_args()
+    verification_statuses = tuple(
+        x.strip().upper() for x in args.verification_statuses.split(",") if x.strip()
+    )
+    path_override = Path(args.db_path) if args.db_path else None
     summary = evaluate_review_priority(
-        path=Path(args.db_path),
+        path=path_override,
         model_version=args.model_version,
         outcome_types=tuple(x.strip() for x in args.outcome_types.split(",") if x.strip()),
+        verification_statuses=verification_statuses,
         horizon_days=args.horizon_days,
         k_values=tuple(int(x) for x in args.k_values.split(",") if x.strip()),
         date_from=args.date_from,
@@ -537,9 +601,53 @@ def main() -> int:
         bootstrap_samples=args.bootstrap_samples,
         random_seed=args.random_seed,
         min_calibration_samples=args.min_calibration_samples,
+        min_class_support=args.min_class_support,
         output_dir=Path(args.output_dir),
     )
-    print(json.dumps(summary, indent=2, sort_keys=True))
+
+    if args.emit_confidence_splits:
+        strict = evaluate_review_priority(
+            path=path_override,
+            model_version=args.model_version,
+            outcome_types=tuple(x.strip() for x in args.outcome_types.split(",") if x.strip()),
+            verification_statuses=("VERIFIED_HIGH",),
+            horizon_days=args.horizon_days,
+            k_values=tuple(int(x) for x in args.k_values.split(",") if x.strip()),
+            date_from=args.date_from,
+            date_to=args.date_to,
+            bootstrap_samples=args.bootstrap_samples,
+            random_seed=args.random_seed,
+            min_calibration_samples=args.min_calibration_samples,
+            min_class_support=args.min_class_support,
+            output_dir=Path(args.output_dir),
+            report_label="strict",
+        )
+        broad = evaluate_review_priority(
+            path=path_override,
+            model_version=args.model_version,
+            outcome_types=tuple(x.strip() for x in args.outcome_types.split(",") if x.strip()),
+            verification_statuses=("VERIFIED_HIGH", "VERIFIED_MEDIUM"),
+            horizon_days=args.horizon_days,
+            k_values=tuple(int(x) for x in args.k_values.split(",") if x.strip()),
+            date_from=args.date_from,
+            date_to=args.date_to,
+            bootstrap_samples=args.bootstrap_samples,
+            random_seed=args.random_seed,
+            min_calibration_samples=args.min_calibration_samples,
+            min_class_support=args.min_class_support,
+            output_dir=Path(args.output_dir),
+            report_label="broad",
+        )
+        payload = {
+            "primary": summary,
+            "tracks": {
+                "strict": strict,
+                "broad": broad,
+            },
+        }
+        print(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        print(json.dumps(summary, indent=2, sort_keys=True))
     return 0
 
 

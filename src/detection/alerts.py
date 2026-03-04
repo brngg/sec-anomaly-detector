@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import json
-import sqlite3
 from typing import Any, Mapping, Optional
+
+from src.db import db_utils
 
 
 def insert_alert(
-    conn: sqlite3.Connection,
+    conn,
     accession_id: str,
     anomaly_type: str,
     severity_score: float,
@@ -16,6 +17,7 @@ def insert_alert(
     details: Mapping[str, Any] | str,
     status: str = "OPEN",
     dedupe_key: Optional[str] = None,
+    event_at: Optional[str] = None,
 ) -> bool:
     """Insert an alert if it doesn't already exist. Returns True if inserted."""
     if dedupe_key is None:
@@ -24,21 +26,28 @@ def insert_alert(
     if isinstance(details, str):
         details_json = details
     else:
-        details_json = json.dumps(details, sort_keys=True)
+        details_json = json.dumps(details, sort_keys=True, default=str)
 
-    changes_before = conn.total_changes
-    conn.execute(
+    event_at_value = event_at
+    cursor = conn.execute(
         """
-        INSERT OR IGNORE INTO alerts (
+        INSERT INTO alerts (
             accession_id,
             anomaly_type,
             severity_score,
             description,
             details,
             status,
-            dedupe_key
+            dedupe_key,
+            event_at,
+            created_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        VALUES (
+            ?, ?, ?, ?, ?, ?, ?,
+            COALESCE(?, (SELECT filed_at FROM filing_events WHERE accession_id = ?), CURRENT_TIMESTAMP),
+            CURRENT_TIMESTAMP
+        )
+        ON CONFLICT(dedupe_key) DO NOTHING
         """,
         (
             accession_id,
@@ -48,6 +57,8 @@ def insert_alert(
             details_json,
             status,
             dedupe_key,
+            event_at_value,
+            accession_id,
         ),
     )
-    return conn.total_changes > changes_before
+    return db_utils.row_was_affected(cursor)

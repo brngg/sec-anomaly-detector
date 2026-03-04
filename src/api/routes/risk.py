@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import sqlite3
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -14,18 +13,22 @@ from ..schemas import RiskExplanation, RiskScore, RiskScoreHistory, RiskScoreLis
 router = APIRouter(tags=["review-priority"])
 
 
-def _parse_json_text(raw: Optional[str]) -> Any:
+def _parse_json_payload(raw: Any) -> Any:
     if raw is None:
         return None
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError:
+    if isinstance(raw, (dict, list)):
         return raw
+    if isinstance(raw, str):
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError:
+            return raw
+    return raw
 
 
-def _row_to_risk_score(row: sqlite3.Row) -> RiskScore:
+def _row_to_risk_score(row: Any) -> RiskScore:
     data = dict(row)
-    parsed_evidence = _parse_json_text(data.get("evidence"))
+    parsed_evidence = _parse_json_payload(data.get("evidence"))
     if isinstance(parsed_evidence, dict):
         data["calibrated_review_priority"] = parsed_evidence.get("calibrated_review_priority")
         evidence_payload = parsed_evidence
@@ -36,13 +39,13 @@ def _row_to_risk_score(row: sqlite3.Row) -> RiskScore:
     return RiskScore(**data)
 
 
-def _company_exists(db: sqlite3.Connection, cik: int) -> bool:
+def _company_exists(db, cik: int) -> bool:
     row = db.execute("SELECT 1 FROM companies WHERE cik = ?", (cik,)).fetchone()
     return row is not None
 
 
 def _resolve_latest_as_of_date(
-    db: sqlite3.Connection,
+    db,
     cik: Optional[int] = None,
     model_version: Optional[str] = None,
     min_score: Optional[float] = None,
@@ -80,7 +83,7 @@ def list_top_risk(
     min_score: Optional[float] = Query(None, ge=0.0, le=1.0),
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
-    db: sqlite3.Connection = Depends(get_db),
+    db=Depends(get_db),
 ) -> RiskScoreList:
     effective_as_of_date = as_of_date or _resolve_latest_as_of_date(
         db,
@@ -165,7 +168,7 @@ def get_risk_history(
     date_to: Optional[str] = Query(None, description="Inclusive end date YYYY-MM-DD"),
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
-    db: sqlite3.Connection = Depends(get_db),
+    db=Depends(get_db),
 ) -> RiskScoreHistory:
     if not _company_exists(db, cik):
         raise HTTPException(status_code=404, detail="Company not found")
@@ -234,7 +237,7 @@ def get_risk_explanation(
     cik: int,
     as_of_date: Optional[str] = Query(None, description="As-of date in YYYY-MM-DD"),
     model_version: Optional[str] = Query(None, description="Review-priority model version"),
-    db: sqlite3.Connection = Depends(get_db),
+    db=Depends(get_db),
 ) -> RiskExplanation:
     if not _company_exists(db, cik):
         raise HTTPException(status_code=404, detail="Company not found")
