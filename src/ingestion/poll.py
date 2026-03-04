@@ -72,16 +72,27 @@ def _stringify_dt(value) -> str:
     return str(value)
 
 
-def _parse_dt(value: str) -> datetime | None:
-    if not value:
+def _parse_dt(value) -> datetime | None:
+    if value is None:
         return None
-    text = value.strip()
+
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    if isinstance(value, date):
+        return datetime.combine(value, datetime.min.time(), tzinfo=timezone.utc)
+
+    text = str(value).strip()
+    if not text:
+        return None
     if len(text) == 10:
         dt = datetime.fromisoformat(text).replace(tzinfo=timezone.utc)
         return dt
     if text.endswith("Z"):
         text = text[:-1] + "+00:00"
-    dt = datetime.fromisoformat(text)
+    try:
+        dt = datetime.fromisoformat(text)
+    except ValueError:
+        return None
     return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
 
