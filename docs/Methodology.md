@@ -1,52 +1,68 @@
-# Methodology: Review Priority Index
+# Methodology: SEC Review Priority Monitor
 
 ## Objective
-Rank issuers by near-term **review priority** using public SEC filing behavior.
+Build a defensible SEC filing triage system that ranks issuers by **review priority** (not fraud probability), with auditable evidence and stable daily operation.
 
 ## Scope
-- This is a triage-prioritization system.
-- It does not claim to prove securities fraud or legal violations.
+- This system is for triage/prioritization.
+- It does not establish legal liability.
+- It does not estimate "fraud probability."
 
-## Data Sources
-- SEC EDGAR filing metadata and form types
-- Public issuer metadata (CIK, ticker, name)
-- Publicly observable future outcomes used for validation labels
+## Data Inputs
+- SEC EDGAR filings (`filing_events`) and form metadata.
+- Issuer registry (`companies`).
+- Derived detector alerts (`alerts`) for:
+  - `NT_FILING`
+  - `FRIDAY_BURYING`
+  - `8K_SPIKE`
+- Optional forward outcomes (`outcome_events`) for validation/calibration only.
 
-## Modeling Unit
-- Issuer-time snapshot (daily as-of date per CIK)
+## Signal Semantics
+- `NT_FILING`: timeliness anomaly.
+- `FRIDAY_BURYING`: Friday after-hours filing behavior.
+- `8K_SPIKE`: company-vs-self frequency anomaly for 8-K/8-KA.
+  - Current policy: evaluate **current UTC month** only in daily runs.
+  - Baseline: prior 5 months.
+  - Trigger: `current_count > mean + 2*std`.
+  - Baseline sufficiency: at least 3 active baseline months.
 
-## Signal Families
-1. Timeliness signals
-   Example: NT form events with recency weighting.
-2. Timing-behavior signals
-   Example: Friday after-hours filing behavior.
-3. Frequency-shift signals
-   Example: company-vs-self 8-K spike behavior.
+## Scoring Models
+### Default model (production): `v2_monthly_abnormal`
+- Daily issuer score computed from the current trailing 30-day interval.
+- Compared against each issuer's own prior-month baseline (mean/std).
+- Final ranking score blends:
+  - current interval level
+  - relative lift vs baseline
+  - z-score vs baseline variability
+- Output stored in `issuer_risk_scores`.
 
-## Feature Construction
-- Fixed lookback windows (30/90 days).
-- Recency decay with 30-day half-life.
-- Signal normalization to comparable component ranges.
-- Persisted feature snapshots and evidence payloads for auditability.
+### Legacy model (fallback): `v1_alert_composite`
+- 30/90-day recency-weighted alert composite.
+- Retained for compatibility and side-by-side comparison.
 
-## Score Construction
-- Weighted composite score in `[0, 1]`.
-- Heuristic weights/scales in v1 with walk-forward validation and calibration.
-- Evidence includes:
-  - top signals
-  - component-level math
-  - top contributing source alerts
-  - as-of timestamp and model metadata
+## Explainability
+Each score exposes evidence payloads used by `/risk/{cik}/explain`:
+- top signal contributors
+- component/breakdown math
+- calibration metadata
+- rank stability and uncertainty metadata
+- monthly baseline diagnostics (default model)
 
-## Output Contract
-- Ranked issuer list by review-priority score
-- Per-issuer trend history
-- Per-issuer evidence payload linking score to source filing events
+## Validation and Calibration
+- Validation lane uses outcome labels to evaluate lift/precision/recall.
+- Calibration is applied only when sufficient class support exists; otherwise marked unavailable.
 
-## Claims and Communication
-- "Higher review-priority score is associated with higher rate of adverse future disclosure outcomes."
+## Known Limits
+- Public filings are delayed/noisy and not equivalent to internal issuer state.
+- Alert sparsity can reduce short-term score separation.
+- Current-month-only spike policy reduces stale replay but may underfire early in month.
+- Outcome labels may lag, limiting immediate calibration confidence.
 
-Not claming that:
-- "Model proves fraud."
-- "Model establishes legal liability."
-- "Company is fundamentally risky as a business."
+## Communication Guardrails
+Safe claim:
+- "Higher review-priority score indicates stronger filing-behavior anomalies relative to issuer history."
+
+Unsafe claims to avoid:
+- "This proves fraud."
+- "This predicts legal guilt."
+- "This is a business quality score."

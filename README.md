@@ -100,7 +100,7 @@ No SQLite DB artifact is committed by the workflow.
 Workflow:
 - `.github/workflows/poll.yml`
 - Schedule: daily at `14:00 UTC` (morning US time zones)
-- Also supports manual refresh via `workflow_dispatch` (recommended before interview demos)
+- Also supports manual refresh via `workflow_dispatch` (recommended before live demos)
 
 Run locally:
 ```bash
@@ -127,6 +127,11 @@ python src/detection/friday_detection.py
 python src/detection/spike_8k_detection.py
 python src/detection/run_all.py
 ```
+
+`8K_SPIKE` policy note:
+- current daily runs evaluate the **current UTC month** only
+- baseline remains strict (`5` prior months, `> mean + 2*std`, min `3` active baseline months)
+- this avoids repeatedly surfacing stale historical spike months as "current"
 
 ## Review Priority Scoring
 Build issuer-level review-priority scores from existing alerts:
@@ -184,6 +189,16 @@ RISK_SCORING_MODE=monthly_abnormal \
 python src/analysis/backfill_risk_scores.py
 ```
 
+Recommended full-range reconstruction command:
+```bash
+caffeinate -dimsu ./venv/bin/python src/analysis/backfill_risk_scores.py \
+  --start-date 2024-03-03 \
+  --end-date 2026-03-04 \
+  --scoring-mode monthly_abnormal \
+  --model-version v2_monthly_abnormal \
+  --progress-every 25
+```
+
 Pre-migration SQLite baseline export:
 ```bash
 python scripts/export_sqlite_baseline.py --db-path data/sec_anomaly.db
@@ -194,7 +209,7 @@ python scripts/export_sqlite_baseline.py --db-path data/sec_anomaly.db
 - `GET /risk/{cik}/history` - historical scores for one issuer
 - `GET /risk/{cik}/explain` - latest or date-specific evidence payload for one issuer
 
-`/risk/top` defaults to `limit=50` for interview-friendly ranked output.
+`/risk/top` defaults to `limit=50` for ranked output.
 Compatibility note: endpoint paths remain `/risk/*` during this phase to avoid client breakage.
 
 ## Outcome Label Import + Evaluation
@@ -205,14 +220,14 @@ python src/analysis/import_outcomes.py --input data/outcomes.csv
 python src/analysis/evaluate_review_priority.py
 ```
 
-## Demo URL + Interview Quick Check
+## Demo URL + Quick Check
 Set your API URL (local or hosted):
 
 ```bash
 export DEMO_URL="http://127.0.0.1:8000"
 ```
 
-Quick 2-minute check before interviews:
+Quick 2-minute check before demos:
 
 ```bash
 # 1) API health and docs
@@ -239,12 +254,23 @@ print("top_rank:", top.get("risk_rank"))
 PY
 ```
 
+API snapshot (top list + issuer history + explain):
+```bash
+python scripts/demo_api_snapshot.py --base-url "$DEMO_URL" --limit 10
+```
+
+Backfill/coverage integrity report for `v2_monthly_abnormal`:
+```bash
+python scripts/validate_v2_backfill.py --model-version v2_monthly_abnormal --strict
+```
+
 ## Notebooks
 - `notebooks/01_signal_qc.ipynb` - signal quality checks and exploratory analysis
 - `notebooks/02_risk_backtest.ipynb` - validation and backtesting workflow
 
 ## Documentation
 - `docs/CodebaseSummary.md`
+- `docs/Runbook.md`
 - `docs/Methodology.md` (optional deep dive)
 - `docs/Backtesting.md` (optional deep dive)
 - `docs/Week1.md` and `docs/Week2.md` (historical planning notes)

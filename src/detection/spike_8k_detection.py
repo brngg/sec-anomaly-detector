@@ -45,6 +45,22 @@ class SpikeEvent:
     threshold: float
 
 
+def _current_utc_month() -> str:
+    today = datetime.now(timezone.utc).date()
+    return f"{today.year:04d}-{today.month:02d}"
+
+
+def _normalize_target_month(target_month: str | None) -> str:
+    if target_month is None:
+        return _current_utc_month()
+
+    text = target_month.strip()
+    year, month = map(int, text.split("-"))
+    if month < 1 or month > 12:
+        raise ValueError(f"Invalid target month '{target_month}'. Expected YYYY-MM.")
+    return f"{year:04d}-{month:02d}"
+
+
 def _parse_dt(value) -> datetime:
     if value is None:
         return datetime.now(timezone.utc)
@@ -52,7 +68,7 @@ def _parse_dt(value) -> datetime:
         return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
     if isinstance(value, date):
         return datetime.combine(value, datetime.min.time(), tzinfo=timezone.utc)
-    text = value.strip()
+    text = str(value).strip()
     if text.endswith("Z"):
         text = text[:-1] + "+00:00"
     dt = datetime.fromisoformat(text)
@@ -147,9 +163,10 @@ def score_monthly_spike(count: int, mean: float, std: float) -> float:
     return 0.60
 
 
-def fetch_8k_filings(conn) -> List[SpikeFiling]:
-    today = datetime.now(timezone.utc).date()
-    cutoff_year, cutoff_month_num = _add_months(today.year, today.month, -LOOKBACK_MONTHS)
+def fetch_8k_filings(conn, target_month: str | None = None) -> List[SpikeFiling]:
+    resolved_target_month = _normalize_target_month(target_month)
+    target_year, target_month_num = map(int, resolved_target_month.split("-"))
+    cutoff_year, cutoff_month_num = _add_months(target_year, target_month_num, -LOOKBACK_MONTHS)
     cutoff_month = f"{cutoff_year:04d}-{cutoff_month_num:02d}-01"
     rows = conn.execute(
         """
@@ -206,22 +223,16 @@ def _build_monthly_counts(
     return counts, latest_accession
 
 
-def detect_monthly_spikes(filings: List[SpikeFiling]) -> List[SpikeEvent]:
+def detect_monthly_spikes(filings: List[SpikeFiling], target_month: str | None = None) -> List[SpikeEvent]:
     spikes: List[SpikeEvent] = []
     counts_by_company, latest_accession = _build_monthly_counts(filings)
+    resolved_target_month = _normalize_target_month(target_month)
+    month_window = _iter_months(resolved_target_month, LOOKBACK_MONTHS)
+    baseline_months = _extract_baseline_months(month_window)
+    if len(baseline_months) < MIN_BASELINE_MONTHS:
+        return spikes
 
     for cik, month_counts in counts_by_company.items():
-        months_with_filings = list(month_counts.keys())
-        months_with_filings.sort()
-        if not months_with_filings:
-            continue
-
-        target_month = months_with_filings[-1]
-        month_window = _iter_months(target_month, LOOKBACK_MONTHS)
-        baseline_months = _extract_baseline_months(month_window)
-        if len(baseline_months) < MIN_BASELINE_MONTHS:
-            continue
-
         baseline_counts: List[int] = []
         active_months = 0
         for month in baseline_months:
@@ -235,11 +246,11 @@ def detect_monthly_spikes(filings: List[SpikeFiling]) -> List[SpikeEvent]:
         mean, std = _mean_std(baseline_counts)
         threshold = mean + STD_MULTIPLIER * std
 
-        current_count = month_counts.get(target_month, 0)
+        current_count = month_counts.get(resolved_target_month, 0)
         if current_count == 0:
             continue
         if current_count > threshold:
-            accession_id = latest_accession.get(cik, {}).get(target_month)
+            accession_id = latest_accession.get(cik, {}).get(resolved_target_month)
             if not accession_id:
                 continue
 
@@ -247,7 +258,7 @@ def detect_monthly_spikes(filings: List[SpikeFiling]) -> List[SpikeEvent]:
                 SpikeEvent(
                     accession_id=accession_id,
                     cik=cik,
-                    month=target_month,
+                    month=resolved_target_month,
                     count=current_count,
                     baseline_mean=mean,
                     baseline_std=std,
@@ -266,11 +277,11 @@ def _fetch_company_map(conn) -> Dict[int, Tuple[Optional[str], Optional[str]]]:
     return company_map
 
 
-def run_8k_spike_detection() -> Tuple[int, int]:
-    """Insert alerts for monthly 8-K spikes. Returns (total_spikes, inserted_alerts)."""
+def run_8k_spike_detection(target_month: str | None = None) -> Tuple[int, int]:
+    """Insert alerts for current-month 8-K spikes. Returns (total_spikes, inserted_alerts)."""
     with db_utils.get_conn() as conn:
-        filings = fetch_8k_filings(conn)
-        spikes = detect_monthly_spikes(filings)
+        filings = fetch_8k_filings(conn, target_month=target_month)
+        spikes = detect_monthly_spikes(filings, target_month=target_month)
         company_map = _fetch_company_map(conn)
 
         inserted = 0

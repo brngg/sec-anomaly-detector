@@ -114,6 +114,7 @@ Signals used:
 - `NT_FILING`
 - `FRIDAY_BURYING`
 - `8K_SPIKE`
+  - detector policy: current UTC month only, compared to strict prior-month baseline
 
 Scoring approach:
 - monthly issuer score built from weighted signal components
