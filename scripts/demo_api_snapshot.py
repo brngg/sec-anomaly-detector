@@ -40,6 +40,12 @@ def _parse_args() -> argparse.Namespace:
         default=None,
         help="Optional explicit CIK; defaults to top-ranked CIK from /risk/top.",
     )
+    parser.add_argument(
+        "--history-limit",
+        type=int,
+        default=3,
+        help="How many points to request from /risk/{cik}/history.",
+    )
     return parser.parse_args()
 
 
@@ -93,7 +99,7 @@ def main() -> int:
     chosen_cik = args.cik or int(items[0]["cik"])
     history = _get_json(
         f"{base}/risk/{chosen_cik}/history",
-        params={"limit": 12},
+        params={"limit": max(1, int(args.history_limit))},
         timeout_seconds=args.timeout_seconds,
         retries=args.retries,
     )
