@@ -9,6 +9,7 @@ from datetime import date, datetime
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import ValidationError
 
 from ..deps import get_db
 from ..schemas import RiskExplanation, RiskScore, RiskScoreHistory, RiskScoreList, ReviewPriorityEvidence
@@ -54,7 +55,11 @@ def _row_to_risk_score(row: Any) -> RiskScore:
     else:
         data["calibrated_review_priority"] = None
         evidence_payload = {}
-    data["evidence"] = ReviewPriorityEvidence.model_validate(evidence_payload)
+    evidence_payload = _iso_string(evidence_payload)
+    try:
+        data["evidence"] = ReviewPriorityEvidence.model_validate(evidence_payload)
+    except ValidationError:
+        data["evidence"] = ReviewPriorityEvidence()
     return RiskScore(**data)
 
 

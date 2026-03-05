@@ -287,3 +287,25 @@ def test_row_to_risk_score_converts_date_datetime_to_iso_strings() -> None:
     assert parsed.updated_at.startswith("2026-03-05T02:03:04")
     assert parsed.evidence.calibration_metadata is not None
     assert parsed.evidence.calibration_metadata.artifact_as_of_date == "2026-03-05"
+
+
+def test_row_to_risk_score_handles_malformed_evidence_without_crashing() -> None:
+    parsed = _row_to_risk_score(
+        {
+            "score_id": 2,
+            "cik": 789012,
+            "as_of_date": "2026-03-05",
+            "model_version": "v2_monthly_abnormal",
+            "risk_score": 0.11,
+            "risk_rank": 20,
+            "percentile": 0.4,
+            "evidence": {"window_scores": "bad-shape"},
+            "created_at": "2026-03-05T01:00:00+00:00",
+            "updated_at": "2026-03-05T01:00:01+00:00",
+            "company_name": "Malformed Evidence Co",
+            "company_ticker": "MEC",
+        }
+    )
+
+    assert parsed.score_id == 2
+    assert parsed.evidence.window_scores == {}
