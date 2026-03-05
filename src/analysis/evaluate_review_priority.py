@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import random
 import subprocess
 import sys
@@ -21,7 +22,7 @@ if __package__ in {None, ""}:
 
 from src.db import db_utils
 
-DEFAULT_MODEL_VERSION = "v1_alert_composite"
+DEFAULT_MODEL_VERSION = os.getenv("RISK_DEFAULT_MODEL_VERSION", "v2_monthly_abnormal")
 CALIBRATION_ARTIFACT_SCHEMA_VERSION = 1
 DEFAULT_OUTCOME_TYPES = ("RESTATEMENT_DISCLOSURE",)
 DEFAULT_HORIZON_DAYS = 90
