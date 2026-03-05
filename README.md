@@ -264,6 +264,21 @@ Backfill/coverage integrity report for `v2_monthly_abnormal`:
 python scripts/validate_v2_backfill.py --model-version v2_monthly_abnormal --strict
 ```
 
+Postgres storage prune (dry-run, defaults to removing `v1_alert_composite` rows):
+```bash
+python scripts/prune_postgres_data.py
+```
+
+Apply prune:
+```bash
+python scripts/prune_postgres_data.py --apply
+```
+
+Optional: also trim old feature snapshots (example keeps last 120 days):
+```bash
+python scripts/prune_postgres_data.py --feature-retention-days 120 --apply
+```
+
 ## Notebooks
 - `notebooks/01_signal_qc.ipynb` - signal quality checks and exploratory analysis
 - `notebooks/02_risk_backtest.ipynb` - validation and backtesting workflow
