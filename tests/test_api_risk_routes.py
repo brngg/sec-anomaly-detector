@@ -1,4 +1,5 @@
 import sys
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -7,6 +8,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.api.deps import get_db
 from src.api.main import create_app
+from src.api.routes.risk import _row_to_risk_score
 from src.db.db_utils import get_conn, upsert_company, upsert_issuer_risk_score
 from src.db.init_db import create_db
 
@@ -238,3 +240,26 @@ def test_risk_top_prefers_default_model_version_when_multiple_exist(tmp_path: Pa
     assert payload_v1["model_version"] == "v1_alert_composite"
     assert payload_v1["items"][0]["model_version"] == "v1_alert_composite"
     assert payload_v1["items"][0]["risk_score"] == 0.2
+
+
+def test_row_to_risk_score_converts_date_datetime_to_iso_strings() -> None:
+    parsed = _row_to_risk_score(
+        {
+            "score_id": 1,
+            "cik": 123456,
+            "as_of_date": date(2026, 3, 5),
+            "model_version": "v2_monthly_abnormal",
+            "risk_score": 0.42,
+            "risk_rank": 7,
+            "percentile": 0.87,
+            "evidence": {"window_scores": {"30": 0.42}},
+            "created_at": datetime(2026, 3, 5, 1, 2, 3, tzinfo=timezone.utc),
+            "updated_at": datetime(2026, 3, 5, 2, 3, 4, tzinfo=timezone.utc),
+            "company_name": "Acme Co",
+            "company_ticker": "ACME",
+        }
+    )
+
+    assert parsed.as_of_date == "2026-03-05"
+    assert parsed.created_at.startswith("2026-03-05T01:02:03")
+    assert parsed.updated_at.startswith("2026-03-05T02:03:04")

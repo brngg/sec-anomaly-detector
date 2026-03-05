@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+from datetime import date, datetime
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -13,6 +14,14 @@ from ..schemas import RiskExplanation, RiskScore, RiskScoreHistory, RiskScoreLis
 
 router = APIRouter(tags=["review-priority"])
 DEFAULT_MODEL_VERSION = os.getenv("RISK_DEFAULT_MODEL_VERSION", "v2_monthly_abnormal")
+
+
+def _iso_string(value: Any) -> Any:
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    return value
 
 
 def _parse_json_payload(raw: Any) -> Any:
@@ -30,6 +39,9 @@ def _parse_json_payload(raw: Any) -> Any:
 
 def _row_to_risk_score(row: Any) -> RiskScore:
     data = dict(row)
+    data["as_of_date"] = _iso_string(data.get("as_of_date"))
+    data["created_at"] = _iso_string(data.get("created_at"))
+    data["updated_at"] = _iso_string(data.get("updated_at"))
     parsed_evidence = _parse_json_payload(data.get("evidence"))
     if isinstance(parsed_evidence, dict):
         data["calibrated_review_priority"] = parsed_evidence.get("calibrated_review_priority")
@@ -72,7 +84,7 @@ def _resolve_latest_as_of_date(
     ).fetchone()
     if row is None:
         return None
-    return row["as_of_date"]
+    return _iso_string(row["as_of_date"])
 
 
 def _resolve_model_version_or_default(db, model_version: Optional[str]) -> Optional[str]:
