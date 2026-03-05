@@ -41,6 +41,11 @@ def _parse_args() -> argparse.Namespace:
         help="Optional explicit CIK; defaults to top-ranked CIK from /risk/top.",
     )
     parser.add_argument(
+        "--skip-top",
+        action="store_true",
+        help="Skip calling /risk/top (requires --cik).",
+    )
+    parser.add_argument(
         "--history-limit",
         type=int,
         default=3,
@@ -79,24 +84,37 @@ def main() -> int:
     args = _parse_args()
     base = args.base_url.rstrip("/")
 
-    top = _get_json(
-        f"{base}/risk/top",
-        params={"limit": args.limit},
-        timeout_seconds=args.timeout_seconds,
-        retries=args.retries,
-    )
-    items = top.get("items", [])
-    if not items:
-        print(
-            json.dumps(
-                {"ok": False, "error": "/risk/top returned no items"},
-                indent=2,
-                sort_keys=True,
+    top: dict = {}
+    items: list[dict] = []
+    if args.skip_top:
+        if args.cik is None:
+            print(
+                json.dumps(
+                    {"ok": False, "error": "--skip-top requires --cik"},
+                    indent=2,
+                    sort_keys=True,
+                )
             )
+            return 1
+        chosen_cik = int(args.cik)
+    else:
+        top = _get_json(
+            f"{base}/risk/top",
+            params={"limit": args.limit},
+            timeout_seconds=args.timeout_seconds,
+            retries=args.retries,
         )
-        return 1
-
-    chosen_cik = args.cik or int(items[0]["cik"])
+        items = top.get("items", [])
+        if not items:
+            print(
+                json.dumps(
+                    {"ok": False, "error": "/risk/top returned no items"},
+                    indent=2,
+                    sort_keys=True,
+                )
+            )
+            return 1
+        chosen_cik = args.cik or int(items[0]["cik"])
     history = _get_json(
         f"{base}/risk/{chosen_cik}/history",
         params={"limit": max(1, int(args.history_limit))},
@@ -112,7 +130,9 @@ def main() -> int:
     output = {
         "ok": True,
         "base_url": base,
-        "top": {
+        "top": None
+        if args.skip_top
+        else {
             "as_of_date": top.get("as_of_date"),
             "model_version": top.get("model_version"),
             "total": top.get("total"),
