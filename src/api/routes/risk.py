@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+from decimal import Decimal
 from datetime import date, datetime
 from typing import Any, Optional
 
@@ -21,6 +22,12 @@ def _iso_string(value: Any) -> Any:
         return value.isoformat()
     if isinstance(value, date):
         return value.isoformat()
+    if isinstance(value, Decimal):
+        return float(value)
+    if isinstance(value, dict):
+        return {str(k): _iso_string(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_iso_string(v) for v in value]
     return value
 
 
@@ -39,9 +46,7 @@ def _parse_json_payload(raw: Any) -> Any:
 
 def _row_to_risk_score(row: Any) -> RiskScore:
     data = dict(row)
-    data["as_of_date"] = _iso_string(data.get("as_of_date"))
-    data["created_at"] = _iso_string(data.get("created_at"))
-    data["updated_at"] = _iso_string(data.get("updated_at"))
+    data = _iso_string(data)
     parsed_evidence = _parse_json_payload(data.get("evidence"))
     if isinstance(parsed_evidence, dict):
         data["calibrated_review_priority"] = parsed_evidence.get("calibrated_review_priority")

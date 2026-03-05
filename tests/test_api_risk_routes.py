@@ -1,5 +1,6 @@
 import sys
 from datetime import date, datetime, timezone
+from decimal import Decimal
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -252,7 +253,28 @@ def test_row_to_risk_score_converts_date_datetime_to_iso_strings() -> None:
             "risk_score": 0.42,
             "risk_rank": 7,
             "percentile": 0.87,
-            "evidence": {"window_scores": {"30": 0.42}},
+            "evidence": {
+                "window_scores": {"30": 0.42},
+                "calibration_metadata": {
+                    "status": "APPLIED",
+                    "warn_days": 14,
+                    "expire_days": 30,
+                    "artifact_as_of_date": date(2026, 3, 5),
+                },
+                "top_contributing_alerts_30d": [
+                    {
+                        "alert_id": 1,
+                        "accession_id": "abc",
+                        "anomaly_type": "NT_FILING",
+                        "severity_score": Decimal("0.9"),
+                        "recency_weight": Decimal("1.0"),
+                        "weighted_severity": Decimal("0.9"),
+                        "contribution_proxy": Decimal("0.5"),
+                        "event_at": datetime(2026, 3, 5, 0, 0, 0, tzinfo=timezone.utc),
+                        "created_at": datetime(2026, 3, 5, 0, 1, 0, tzinfo=timezone.utc),
+                    }
+                ],
+            },
             "created_at": datetime(2026, 3, 5, 1, 2, 3, tzinfo=timezone.utc),
             "updated_at": datetime(2026, 3, 5, 2, 3, 4, tzinfo=timezone.utc),
             "company_name": "Acme Co",
@@ -263,3 +285,5 @@ def test_row_to_risk_score_converts_date_datetime_to_iso_strings() -> None:
     assert parsed.as_of_date == "2026-03-05"
     assert parsed.created_at.startswith("2026-03-05T01:02:03")
     assert parsed.updated_at.startswith("2026-03-05T02:03:04")
+    assert parsed.evidence.calibration_metadata is not None
+    assert parsed.evidence.calibration_metadata.artifact_as_of_date == "2026-03-05"
