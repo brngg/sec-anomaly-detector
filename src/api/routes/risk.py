@@ -45,9 +45,32 @@ def _parse_json_payload(raw: Any) -> Any:
     return raw
 
 
-def _row_to_risk_score(row: Any) -> RiskScore:
+def _risk_score_select_clause(*, include_evidence: bool) -> str:
+    evidence_sql = "r.evidence" if include_evidence else "NULL AS evidence"
+    return f"""
+        r.score_id,
+        r.cik,
+        r.as_of_date,
+        r.model_version,
+        r.risk_score,
+        r.risk_rank,
+        r.percentile,
+        {evidence_sql},
+        r.created_at,
+        r.updated_at,
+        c.name AS company_name,
+        c.ticker AS company_ticker
+    """
+
+
+def _row_to_risk_score(row: Any, *, include_evidence: bool = True) -> RiskScore:
     data = dict(row)
     data = _iso_string(data)
+    if not include_evidence:
+        data["calibrated_review_priority"] = None
+        data["evidence"] = None
+        return RiskScore(**data)
+
     parsed_evidence = _parse_json_payload(data.get("evidence"))
     if isinstance(parsed_evidence, dict):
         data["calibrated_review_priority"] = parsed_evidence.get("calibrated_review_priority")
@@ -130,6 +153,7 @@ def list_top_risk(
         description="Filter by model version (review-priority model)",
     ),
     min_score: Optional[float] = Query(None, ge=0.0, le=1.0),
+    include_evidence: bool = Query(True, description="Include evidence payloads in each row"),
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
     db=Depends(get_db),
@@ -171,18 +195,7 @@ def list_top_risk(
     rows = db.execute(
         f"""
         SELECT
-            r.score_id,
-            r.cik,
-            r.as_of_date,
-            r.model_version,
-            r.risk_score,
-            r.risk_rank,
-            r.percentile,
-            r.evidence,
-            r.created_at,
-            r.updated_at,
-            c.name AS company_name,
-            c.ticker AS company_ticker
+            {_risk_score_select_clause(include_evidence=include_evidence)}
         FROM issuer_risk_scores r
         LEFT JOIN companies c ON c.cik = r.cik
         {where_sql}
@@ -196,7 +209,7 @@ def list_top_risk(
         tuple([*params, limit, offset]),
     ).fetchall()
 
-    items = [_row_to_risk_score(row) for row in rows]
+    items = [_row_to_risk_score(row, include_evidence=include_evidence) for row in rows]
     return RiskScoreList(
         items=items,
         total=total,
@@ -216,6 +229,7 @@ def get_risk_history(
     ),
     date_from: Optional[str] = Query(None, description="Inclusive start date YYYY-MM-DD"),
     date_to: Optional[str] = Query(None, description="Inclusive end date YYYY-MM-DD"),
+    include_evidence: bool = Query(True, description="Include evidence payloads in each row"),
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
     db=Depends(get_db),
@@ -247,18 +261,7 @@ def get_risk_history(
     rows = db.execute(
         f"""
         SELECT
-            r.score_id,
-            r.cik,
-            r.as_of_date,
-            r.model_version,
-            r.risk_score,
-            r.risk_rank,
-            r.percentile,
-            r.evidence,
-            r.created_at,
-            r.updated_at,
-            c.name AS company_name,
-            c.ticker AS company_ticker
+            {_risk_score_select_clause(include_evidence=include_evidence)}
         FROM issuer_risk_scores r
         LEFT JOIN companies c ON c.cik = r.cik
         {where_sql}
@@ -272,7 +275,7 @@ def get_risk_history(
         tuple([*params, limit, offset]),
     ).fetchall()
 
-    items = [_row_to_risk_score(row) for row in rows]
+    items = [_row_to_risk_score(row, include_evidence=include_evidence) for row in rows]
     return RiskScoreHistory(
         cik=cik,
         items=items,
@@ -313,18 +316,7 @@ def get_risk_explanation(
     row = db.execute(
         f"""
         SELECT
-            r.score_id,
-            r.cik,
-            r.as_of_date,
-            r.model_version,
-            r.risk_score,
-            r.risk_rank,
-            r.percentile,
-            r.evidence,
-            r.created_at,
-            r.updated_at,
-            c.name AS company_name,
-            c.ticker AS company_ticker
+            {_risk_score_select_clause(include_evidence=True)}
         FROM issuer_risk_scores r
         LEFT JOIN companies c ON c.cik = r.cik
         {where_sql}
@@ -337,4 +329,4 @@ def get_risk_explanation(
     if row is None:
         raise HTTPException(status_code=404, detail="Risk score not found")
 
-    return RiskExplanation(score=_row_to_risk_score(row))
+    return RiskExplanation(score=_row_to_risk_score(row, include_evidence=True))

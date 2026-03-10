@@ -1,0 +1,51 @@
+name: SEC Weekly Maintenance
+
+on:
+  schedule:
+    - cron: "0 13 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: sec-weekly-maintenance
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  weekly-maintenance:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run prune and retention report
+        id: maintenance
+        env:
+          DB_BACKEND: "postgres"
+          DATABASE_URL_RW: ${{ secrets.DATABASE_URL_RW }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL_RW }}
+        run: |
+          REPORT_PATH="docs/reports/retention/postgres_retention_$(date -u +%Y%m%dT%H%M%SZ).json"
+          echo "report_path=$REPORT_PATH" >> "$GITHUB_OUTPUT"
+          python scripts/prune_postgres_data.py \
+            --feature-retention-days 120 \
+            --apply \
+            --output "$REPORT_PATH"
+
+      - name: Upload retention artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: retention-report
+          path: ${{ steps.maintenance.outputs.report_path }}
+          if-no-files-found: error

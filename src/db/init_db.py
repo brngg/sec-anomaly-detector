@@ -119,8 +119,14 @@ CREATE TABLE IF NOT EXISTS issuer_risk_scores (
 CREATE INDEX IF NOT EXISTS idx_issuer_risk_scores_as_of_score
     ON issuer_risk_scores (as_of_date, risk_score DESC);
 
+CREATE INDEX IF NOT EXISTS idx_issuer_risk_scores_model_as_of_rank
+    ON issuer_risk_scores (model_version, as_of_date, risk_rank, cik);
+
 CREATE INDEX IF NOT EXISTS idx_issuer_risk_scores_cik_as_of
     ON issuer_risk_scores (cik, as_of_date);
+
+CREATE INDEX IF NOT EXISTS idx_issuer_risk_scores_cik_model_as_of
+    ON issuer_risk_scores (cik, model_version, as_of_date DESC);
 
 CREATE TABLE IF NOT EXISTS outcome_events (
     outcome_id INTEGER PRIMARY KEY,
@@ -243,8 +249,14 @@ CREATE TABLE IF NOT EXISTS issuer_risk_scores (
 CREATE INDEX IF NOT EXISTS idx_issuer_risk_scores_as_of_score
     ON issuer_risk_scores (as_of_date, risk_score DESC);
 
+CREATE INDEX IF NOT EXISTS idx_issuer_risk_scores_model_as_of_rank
+    ON issuer_risk_scores (model_version, as_of_date, risk_rank, cik);
+
 CREATE INDEX IF NOT EXISTS idx_issuer_risk_scores_cik_as_of
     ON issuer_risk_scores (cik, as_of_date);
+
+CREATE INDEX IF NOT EXISTS idx_issuer_risk_scores_cik_model_as_of
+    ON issuer_risk_scores (cik, model_version, as_of_date DESC);
 
 CREATE TABLE IF NOT EXISTS outcome_events (
     outcome_id BIGSERIAL PRIMARY KEY,

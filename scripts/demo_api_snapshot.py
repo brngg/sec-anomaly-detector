@@ -51,6 +51,11 @@ def _parse_args() -> argparse.Namespace:
         default=3,
         help="How many points to request from /risk/{cik}/history.",
     )
+    parser.add_argument(
+        "--api-key",
+        default=os.getenv("DEMO_API_KEY") or os.getenv("API_KEY"),
+        help="Optional API key sent as X-API-Key.",
+    )
     return parser.parse_args()
 
 
@@ -58,11 +63,14 @@ def _get_json(
     url: str,
     *,
     params: dict[str, object] | None = None,
+    api_key: str | None = None,
     timeout_seconds: float = 30.0,
     retries: int = 0,
 ) -> dict:
     full_url = f"{url}?{urlencode(params)}" if params else url
     request = Request(full_url, method="GET")
+    if api_key:
+        request.add_header("X-API-Key", api_key)
 
     attempts = max(1, int(retries) + 1)
     last_error: Exception | None = None
@@ -100,7 +108,8 @@ def main() -> int:
     else:
         top = _get_json(
             f"{base}/risk/top",
-            params={"limit": args.limit},
+            params={"limit": args.limit, "include_evidence": "false"},
+            api_key=args.api_key,
             timeout_seconds=args.timeout_seconds,
             retries=args.retries,
         )
@@ -117,12 +126,14 @@ def main() -> int:
         chosen_cik = args.cik or int(items[0]["cik"])
     history = _get_json(
         f"{base}/risk/{chosen_cik}/history",
-        params={"limit": max(1, int(args.history_limit))},
+        params={"limit": max(1, int(args.history_limit)), "include_evidence": "false"},
+        api_key=args.api_key,
         timeout_seconds=args.timeout_seconds,
         retries=args.retries,
     )
     explain = _get_json(
         f"{base}/risk/{chosen_cik}/explain",
+        api_key=args.api_key,
         timeout_seconds=args.timeout_seconds,
         retries=args.retries,
     )

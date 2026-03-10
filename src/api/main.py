@@ -1,7 +1,8 @@
 """FastAPI application entrypoint."""
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 
+from .deps import require_api_key
 from .routes import alerts_router, companies_router, filings_router, health_router, risk_router
 
 
@@ -15,11 +16,13 @@ def create_app() -> FastAPI:
         ),
     )
 
+    protected_dependencies = [Depends(require_api_key)]
+
     app.include_router(health_router)
-    app.include_router(companies_router)
-    app.include_router(filings_router)
-    app.include_router(alerts_router)
-    app.include_router(risk_router)
+    app.include_router(companies_router, dependencies=protected_dependencies)
+    app.include_router(filings_router, dependencies=protected_dependencies)
+    app.include_router(alerts_router, dependencies=protected_dependencies)
+    app.include_router(risk_router, dependencies=protected_dependencies)
 
     return app
 

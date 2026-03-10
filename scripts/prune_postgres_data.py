@@ -71,6 +71,11 @@ def _parse_args() -> argparse.Namespace:
         action="store_true",
         help="Execute deletions. Without this flag, script is dry-run only.",
     )
+    parser.add_argument(
+        "--output",
+        default=None,
+        help="Optional JSON output path for the prune report.",
+    )
     return parser.parse_args()
 
 
@@ -231,7 +236,12 @@ def main() -> int:
         }
 
     summary["ok"] = True
-    print(json.dumps(summary, indent=2, sort_keys=True, default=str))
+    rendered = json.dumps(summary, indent=2, sort_keys=True, default=str)
+    if args.output:
+        output_path = Path(args.output)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(rendered + "\n", encoding="utf-8")
+    print(rendered)
     return 0
 
 

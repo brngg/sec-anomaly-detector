@@ -175,6 +175,49 @@ def test_risk_history_and_explain(tmp_path: Path) -> None:
     assert isinstance(explain_payload["score"]["evidence"], dict)
 
 
+def test_risk_top_and_history_can_exclude_evidence(tmp_path: Path) -> None:
+    db_path = tmp_path / "test.db"
+    create_db(path=db_path, reset=False)
+
+    with get_conn(path=db_path) as conn:
+        upsert_company(conn, cik=2501, name="Lean Payload Co", ticker="LPC", industry="Tech")
+        upsert_issuer_risk_score(
+            conn,
+            cik=2501,
+            as_of_date="2026-03-01",
+            model_version="v2_monthly_abnormal",
+            risk_score=0.61,
+            risk_rank=3,
+            percentile=0.7,
+            evidence={
+                "window_scores": {"30": 0.61, "90": 0.5},
+                "reason_summary": "Synthetic evidence payload.",
+                "calibrated_review_priority": 0.58,
+            },
+        )
+
+    client = _build_client(db_path)
+
+    top = client.get("/risk/top", params={"include_evidence": "false"})
+    assert top.status_code == 200
+    top_payload = top.json()
+    assert top_payload["items"][0]["cik"] == 2501
+    assert top_payload["items"][0]["evidence"] is None
+    assert top_payload["items"][0]["calibrated_review_priority"] is None
+
+    history = client.get("/risk/2501/history", params={"include_evidence": "false"})
+    assert history.status_code == 200
+    history_payload = history.json()
+    assert history_payload["items"][0]["evidence"] is None
+    assert history_payload["items"][0]["calibrated_review_priority"] is None
+
+    explain = client.get("/risk/2501/explain")
+    assert explain.status_code == 200
+    explain_payload = explain.json()
+    assert explain_payload["score"]["evidence"]["reason_summary"] == "Synthetic evidence payload."
+    assert explain_payload["score"]["calibrated_review_priority"] == 0.58
+
+
 def test_risk_endpoints_handle_missing_company_and_empty_scores(tmp_path: Path) -> None:
     db_path = tmp_path / "test.db"
     create_db(path=db_path, reset=False)

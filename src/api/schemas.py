@@ -193,7 +193,7 @@ class RiskScore(BaseModel):
     risk_rank: Optional[int] = None
     percentile: Optional[float] = None
     calibrated_review_priority: Optional[float] = None
-    evidence: ReviewPriorityEvidence
+    evidence: Optional[ReviewPriorityEvidence] = None
     created_at: str
     updated_at: str
     company_name: Optional[str] = None
