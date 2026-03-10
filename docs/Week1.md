@@ -1,5 +1,7 @@
 # SEC Filing Project Plan — Week 1
 
+Historical note: this is an early planning document, not the current scoring spec. Treat the current behavior in [README.md](../README.md), [docs/Methodology.md](Methodology.md), [docs/ScoreAuditGuide.md](ScoreAuditGuide.md), and [docs/Runbook.md](Runbook.md) as authoritative.
+
 ## Strategy & Core Questions
 
 ### 1. What companies do we want to track?

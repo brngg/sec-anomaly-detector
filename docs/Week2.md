@@ -1,5 +1,7 @@
 # SEC Filing Project Plan — Week 2
 
+Historical note: this is an early planning document, not the current scoring spec. Treat the current behavior in [README.md](../README.md), [docs/Methodology.md](Methodology.md), [docs/ScoreAuditGuide.md](ScoreAuditGuide.md), and [docs/Runbook.md](Runbook.md) as authoritative.
+
 Problem:
 How can we differenciate what is normal for a specific company versus what is not normal? Each company has their own frequency of filling and we cannot compare equally or on a "flat number". Example company A files 16 filings on average while company B only files 7. Taking the average of multiple company filings the average might be 8 filings. Company A would be flagged but it is the case that 16 fillings is normal for company A.
 

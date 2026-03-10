@@ -1,5 +1,7 @@
 # Postgres Migration Change Log
 
+Historical note: this is a changelog document, not the current scoring spec. Treat the current behavior in [README.md](../README.md), [docs/Methodology.md](Methodology.md), [docs/ScoreAuditGuide.md](ScoreAuditGuide.md), and [docs/Runbook.md](Runbook.md) as authoritative.
+
 Date: 2026-03-04
 
 ## Scope
