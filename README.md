@@ -7,7 +7,8 @@ This project does not attempt to establish legal proof of fraud.
 It produces auditable, pre-enforcement review-priority signals to help prioritize issuer review.
 
 ## Status
-Pivot in progress from event-level anomaly alerts to issuer-level review-priority monitoring.
+Issuer-level review-priority scoring, `/risk/*` API routes, and the Streamlit dashboard are active in this codebase.
+Event-level anomaly alerts remain the signal layer feeding the leaderboard.
 
 ## Current Capabilities
 - SEC ingestion and polling for tracked issuers
@@ -15,18 +16,16 @@ Pivot in progress from event-level anomaly alerts to issuer-level review-priorit
   - non-timely (NT) filings
   - Friday after-hours filings
   - 8-K monthly spike signals
-- Alert storage, deduplication, and API retrieval
-
-## Target Capabilities (Pivot)
-- Issuer-level review-priority score (ranked watchlist)
-- Evidence payload for score explainability
-- Forward-outcome backtesting using only public SEC data
+- Alert storage, deduplication, and drilldown APIs
+- Issuer-level review-priority scoring with explainability payloads
+- Historical score backfill plus validation/calibration workflows
+- Streamlit dashboard for leaderboard, issuer history, and explain views
 
 ## Setup
 ```bash
 # Clone repository
-git clone https://github.com/YOUR_USERNAME/sec-disclosure-risk-monitor.git
-cd sec-disclosure-risk-monitor
+git clone https://github.com/YOUR_USERNAME/sec-anomoly-detector.git
+cd sec-anomoly-detector
 
 # Create virtual environment
 python3 -m venv venv
@@ -39,13 +38,7 @@ pip install -r requirements.txt
 python scripts/test_setup.py
 ```
 
-If your GitHub repo is still named `sec-anomaly-detector`, rename it first in GitHub
-Settings, then update your local remote URL:
-
-```bash
-git remote set-url origin git@github.com:YOUR_USERNAME/sec-disclosure-risk-monitor.git
-git remote -v
-```
+If your fork uses a different repository name, adjust the clone URL and `cd` target accordingly.
 
 ## Ingestion Config
 Backfill reads a company list from `data/companies.csv` by default (header: `ticker`).
@@ -53,18 +46,23 @@ Backfill reads a company list from `data/companies.csv` by default (header: `tic
 Environment variables:
 - `DB_BACKEND` - backend toggle: `postgres` or `sqlite`
 - `DATABASE_URL` - RW DSN when `DB_BACKEND=postgres` (Supabase pooler URL, `sslmode=require`)
+- `DATABASE_URL_RW` - optional alias for `DATABASE_URL`; GitHub Actions and some ops scripts use this name
 - `API_DATABASE_URL` - optional RO DSN when `DB_BACKEND=postgres`
+- `DATABASE_URL_RO` - optional alias for `API_DATABASE_URL` / API read-only DSN
 - `API_AUTH_ENABLED` - set to `1` to require `X-API-Key` on all non-health API routes
 - `API_KEY` - shared API key expected in `X-API-Key` when auth is enabled
 - `DEMO_API_KEY` - optional helper env used by `scripts/demo_api_snapshot.py`
 - `RISK_SCORING_MODE` - scoring mode (`monthly_abnormal` default, `alert_composite` legacy)
 - `RISK_DEFAULT_MODEL_VERSION` - API default model selector (default `v2_monthly_abnormal`)
+- `RISK_MODEL_VERSION` - optional explicit model-version label override for scoring/backfills
 - `RISK_MONTHLY_HISTORY_MONTHS` - optional history window for monthly baseline (unset = all available history)
 - `SEC_IDENTITY` - SEC identity string (recommended)
 - `COMPANIES_CSV` - Optional path to a custom CSV file
 - `BACKFILL_START_DATE` - optional explicit backfill start date (`YYYY-MM-DD`)
 - `BACKFILL_DAYS` - optional window in days when `BACKFILL_START_DATE` is unset (default `730`)
 - `DRY_RUN` - Set to `1` or `true` to skip DB writes while still fetching
+
+For a fuller example that also includes poller and dashboard runtime knobs, see `.env.example`.
 
 Backend toggle examples:
 ```bash
@@ -123,6 +121,14 @@ Optional polling flags:
 - `POLL_ENABLE_CATCHUP` - enable/disable stale-company catch-up (default `1`)
 - `POLL_ENABLE_RISK_SCORING` - run issuer risk scoring after detections when new filings are inserted (default `1`)
 - `POLL_ENABLE_INLINE_ANALYSIS` - run detections/scoring inside `poll.py` (default `1`)
+- `POLL_CATCHUP_DAYS` - stale-company catch-up window in days (default `2`)
+- `POLL_CATCHUP_COOLDOWN_HOURS` - minimum hours between catch-up syncs for the same issuer (default `48`)
+- `POLL_LOOKBACK_DAYS` - fallback lookback when an issuer has no prior watermark (default `14`)
+- `POLL_CURRENT_PAGE_SIZE` - EDGAR current-feed page size (default `100`)
+- `POLL_FEED_BUFFER_HOURS` - overlap buffer applied to the current-feed cutoff (default `6`)
+- `POLL_STALE_RUN_HOURS` - issuer staleness warning threshold in hours (default `6`)
+- `POLL_STALE_RUN_THRESHOLD_PCT` - warning triggers when this share of issuers looks stale (default `0.8`)
+- `POLL_SLEEP_SECONDS` - pause between issuer syncs to keep request pacing gentle (default `0.11`)
 - `POLL_ADVISORY_LOCK_NAME` - Postgres advisory lock name used to prevent overlapping runs (default `sec-daily-refresh`)
 - `POLL_LOCK_PATH` - sqlite-only lock file path when `DB_BACKEND=sqlite` (default `.poller.lock`)
 - `POLL_LOCK_TIMEOUT_SECONDS` - lock acquire timeout; `0` means non-blocking exit when another run holds the lock
@@ -270,8 +276,8 @@ python src/analysis/backfill_risk_scores.py
 Recommended full-range reconstruction command:
 ```bash
 caffeinate -dimsu ./venv/bin/python src/analysis/backfill_risk_scores.py \
-  --start-date 2024-03-03 \
-  --end-date 2026-03-04 \
+  --backfill-days 730 \
+  --end-date "$(date -u +%F)" \
   --scoring-mode monthly_abnormal \
   --model-version v2_monthly_abnormal \
   --progress-every 25
@@ -310,6 +316,10 @@ export DASHBOARD_API_BASE_URL="http://127.0.0.1:8000"
 export DASHBOARD_API_KEY="$DEMO_API_KEY"  # optional; required when API auth is enabled
 ./venv/bin/streamlit run app.py
 ```
+
+Optional dashboard tuning:
+- `DASHBOARD_DEFAULT_LIMIT` - default leaderboard size in the sidebar (default `25`)
+- `DASHBOARD_REQUEST_TIMEOUT_SECONDS` - API request timeout for dashboard reads (default `20`)
 
 Current dashboard scope:
 - live leaderboard via `/risk/top?include_evidence=false`
@@ -401,11 +411,11 @@ python scripts/prune_postgres_data.py --feature-retention-days 120 --apply --out
 - `docs/Backtesting.md` (optional deep dive)
 - `docs/Week1.md` and `docs/Week2.md` (historical planning notes)
 
-Note: as of 2026-03-03, operational/runbook/spec details are unified in `docs/CodebaseSummary.md`.
+Note: operational/runbook/spec details are unified in `docs/CodebaseSummary.md`.
 
 ## Project Structure
 ```text
-sec-disclosure-risk-monitor/
+sec-anomoly-detector/
 ├── src/
 │   ├── db/
 │   ├── ingestion/

@@ -1,0 +1,503 @@
+{
+  "aggregate_metrics": [
+    {
+      "k": 10,
+      "lift_ci": [
+        0.0,
+        0.0
+      ],
+      "lift_mean": 0.0,
+      "method": "equal_weight",
+      "precision_ci": [
+        0.0,
+        0.0
+      ],
+      "precision_mean": 0.0,
+      "recall_ci": [
+        0.0,
+        0.0
+      ],
+      "recall_mean": 0.0
+    },
+    {
+      "k": 10,
+      "lift_ci": [
+        0.0,
+        0.0
+      ],
+      "lift_mean": 0.0,
+      "method": "model",
+      "precision_ci": [
+        0.0,
+        0.0
+      ],
+      "precision_mean": 0.0,
+      "recall_ci": [
+        0.0,
+        0.0
+      ],
+      "recall_mean": 0.0
+    },
+    {
+      "k": 10,
+      "lift_ci": [
+        0.0,
+        0.0
+      ],
+      "lift_mean": 0.0,
+      "method": "nt_only",
+      "precision_ci": [
+        0.0,
+        0.0
+      ],
+      "precision_mean": 0.0,
+      "recall_ci": [
+        0.0,
+        0.0
+      ],
+      "recall_mean": 0.0
+    },
+    {
+      "k": 10,
+      "lift_ci": [
+        0.0,
+        0.0
+      ],
+      "lift_mean": 0.0,
+      "method": "random",
+      "precision_ci": [
+        0.0,
+        0.0
+      ],
+      "precision_mean": 0.0,
+      "recall_ci": [
+        0.0,
+        0.0
+      ],
+      "recall_mean": 0.0
+    },
+    {
+      "k": 20,
+      "lift_ci": [
+        0.0,
+        0.0
+      ],
+      "lift_mean": 0.0,
+      "method": "equal_weight",
+      "precision_ci": [
+        0.0,
+        0.0
+      ],
+      "precision_mean": 0.0,
+      "recall_ci": [
+        0.0,
+        0.0
+      ],
+      "recall_mean": 0.0
+    },
+    {
+      "k": 20,
+      "lift_ci": [
+        0.0,
+        0.0
+      ],
+      "lift_mean": 0.0,
+      "method": "model",
+      "precision_ci": [
+        0.0,
+        0.0
+      ],
+      "precision_mean": 0.0,
+      "recall_ci": [
+        0.0,
+        0.0
+      ],
+      "recall_mean": 0.0
+    },
+    {
+      "k": 20,
+      "lift_ci": [
+        0.0,
+        0.0
+      ],
+      "lift_mean": 0.0,
+      "method": "nt_only",
+      "precision_ci": [
+        0.0,
+        0.0
+      ],
+      "precision_mean": 0.0,
+      "recall_ci": [
+        0.0,
+        0.0
+      ],
+      "recall_mean": 0.0
+    },
+    {
+      "k": 20,
+      "lift_ci": [
+        0.0,
+        0.0
+      ],
+      "lift_mean": 0.0,
+      "method": "random",
+      "precision_ci": [
+        0.0,
+        0.0
+      ],
+      "precision_mean": 0.0,
+      "recall_ci": [
+        0.0,
+        0.0
+      ],
+      "recall_mean": 0.0
+    },
+    {
+      "k": 50,
+      "lift_ci": [
+        0.0,
+        0.0
+      ],
+      "lift_mean": 0.0,
+      "method": "equal_weight",
+      "precision_ci": [
+        0.0,
+        0.0
+      ],
+      "precision_mean": 0.0,
+      "recall_ci": [
+        0.0,
+        0.0
+      ],
+      "recall_mean": 0.0
+    },
+    {
+      "k": 50,
+      "lift_ci": [
+        0.0,
+        0.0
+      ],
+      "lift_mean": 0.0,
+      "method": "model",
+      "precision_ci": [
+        0.0,
+        0.0
+      ],
+      "precision_mean": 0.0,
+      "recall_ci": [
+        0.0,
+        0.0
+      ],
+      "recall_mean": 0.0
+    },
+    {
+      "k": 50,
+      "lift_ci": [
+        0.0,
+        0.0
+      ],
+      "lift_mean": 0.0,
+      "method": "nt_only",
+      "precision_ci": [
+        0.0,
+        0.0
+      ],
+      "precision_mean": 0.0,
+      "recall_ci": [
+        0.0,
+        0.0
+      ],
+      "recall_mean": 0.0
+    },
+    {
+      "k": 50,
+      "lift_ci": [
+        0.0,
+        0.0
+      ],
+      "lift_mean": 0.0,
+      "method": "random",
+      "precision_ci": [
+        0.0,
+        0.0
+      ],
+      "precision_mean": 0.0,
+      "recall_ci": [
+        0.0,
+        0.0
+      ],
+      "recall_mean": 0.0
+    }
+  ],
+  "as_of_dates_evaluated": 1,
+  "calibration": [
+    {
+      "as_of_date": "2026-03-03",
+      "calibrated_scores": {
+        "1800": 0.14770678365421233,
+        "2488": 0.19848900422186633,
+        "4962": 0.0,
+        "5272": 0.06704725603885812,
+        "12927": 0.0,
+        "14272": 0.0,
+        "18230": 0.17318541328894235,
+        "19617": 0.07115262819287889,
+        "21344": 0.0,
+        "21665": 0.0,
+        "27419": 0.17318541328894235,
+        "32604": 0.10467625621230794,
+        "34088": 0.04032976380767711,
+        "36104": 0.17318541328894235,
+        "40533": 0.06704725603885812,
+        "40545": 0.0,
+        "50863": 0.10057088405828717,
+        "51143": 0.03352362801942906,
+        "59478": 0.03352362801942906,
+        "60667": 0.0,
+        "63908": 0.0,
+        "64803": 0.03352362801942906,
+        "66740": 0.03352362801942906,
+        "70858": 0.10467625621230794,
+        "72971": 0.24023266932780046,
+        "77476": 0.0,
+        "78003": 0.03352362801942906,
+        "80424": 0.03352362801942906,
+        "92122": 0.35,
+        "93410": 0.10057088405828717,
+        "97476": 0.0,
+        "97745": 0.0,
+        "100885": 0.06704725603885812,
+        "101829": 0.0,
+        "104169": 0.26879427796911587,
+        "200406": 0.0,
+        "310158": 0.0,
+        "313616": 0.0,
+        "315189": 0.2393271532465319,
+        "316709": 0.06704725603885812,
+        "318154": 0.0,
+        "320187": 0.0,
+        "320193": 0.06704725603885812,
+        "354950": 0.0,
+        "731766": 0.06704725603885812,
+        "732712": 0.0,
+        "732717": 0.03352362801942906,
+        "753308": 0.06704725603885812,
+        "764180": 0.0,
+        "773840": 0.03352362801942906,
+        "789019": 0.0,
+        "796343": 0.0,
+        "804328": 0.03352362801942906,
+        "829224": 0.06704725603885812,
+        "831001": 0.04032976380767711,
+        "858877": 0.03352362801942906,
+        "882095": 0.03352362801942906,
+        "886982": 0.07115262819287889,
+        "895421": 0.0,
+        "896878": 0.03352362801942906,
+        "909832": 0.0,
+        "927628": 0.503547843592777,
+        "936468": 0.03352362801942906,
+        "1018724": 0.0,
+        "1035267": 0.0,
+        "1045810": 0.03352362801942906,
+        "1048911": 0.0,
+        "1053507": 0.11445682544388541,
+        "1063761": 0.0,
+        "1065280": 0.10057088405828717,
+        "1067983": 0.0,
+        "1075531": 0.10057088405828717,
+        "1090727": 0.0,
+        "1099219": 0.21541544963974835,
+        "1103982": 0.03352362801942906,
+        "1108524": 0.0,
+        "1141391": 0.0,
+        "1163165": 0.0,
+        "1166691": 0.11445682544388541,
+        "1283699": 0.0,
+        "1318605": 0.06704725603885812,
+        "1321655": 0.0,
+        "1326160": 0.0,
+        "1326801": 0.10057088405828717,
+        "1341439": 0.10057088405828717,
+        "1373715": 0.06704725603885812,
+        "1390777": 0.0,
+        "1403161": 0.11445682544388541,
+        "1413329": 0.0,
+        "1467373": 0.0,
+        "1467858": 0.0,
+        "1543151": 0.21081441346239221,
+        "1551152": 0.03352362801942906,
+        "1613103": 0.0,
+        "1633917": 0.03352362801942906,
+        "1652044": 0.07115262819287889,
+        "1707925": 0.0,
+        "1730168": 0.0,
+        "1744489": 0.2072015067135621,
+        "2012383": 0.03352362801942906
+      },
+      "isotonic_blocks": [],
+      "train_samples": 0,
+      "used_isotonic": false
+    }
+  ],
+  "calibration_artifact_schema_version": 1,
+  "commit_sha": "f4df7e12a66c1f6f26fb637555db6cec34e75939",
+  "daily_metrics": [
+    {
+      "as_of_date": "2026-03-03",
+      "base_rate": 0.0,
+      "hits": 0,
+      "k": 10,
+      "lift": 0.0,
+      "method": "model",
+      "precision": 0.0,
+      "recall": 0.0,
+      "total_positives": 0,
+      "universe_size": 100
+    },
+    {
+      "as_of_date": "2026-03-03",
+      "base_rate": 0.0,
+      "hits": 0,
+      "k": 10,
+      "lift": 0.0,
+      "method": "nt_only",
+      "precision": 0.0,
+      "recall": 0.0,
+      "total_positives": 0,
+      "universe_size": 100
+    },
+    {
+      "as_of_date": "2026-03-03",
+      "base_rate": 0.0,
+      "hits": 0,
+      "k": 10,
+      "lift": 0.0,
+      "method": "equal_weight",
+      "precision": 0.0,
+      "recall": 0.0,
+      "total_positives": 0,
+      "universe_size": 100
+    },
+    {
+      "as_of_date": "2026-03-03",
+      "base_rate": 0.0,
+      "hits": 0,
+      "k": 10,
+      "lift": 0.0,
+      "method": "random",
+      "precision": 0.0,
+      "recall": 0.0,
+      "total_positives": 0,
+      "universe_size": 100
+    },
+    {
+      "as_of_date": "2026-03-03",
+      "base_rate": 0.0,
+      "hits": 0,
+      "k": 20,
+      "lift": 0.0,
+      "method": "model",
+      "precision": 0.0,
+      "recall": 0.0,
+      "total_positives": 0,
+      "universe_size": 100
+    },
+    {
+      "as_of_date": "2026-03-03",
+      "base_rate": 0.0,
+      "hits": 0,
+      "k": 20,
+      "lift": 0.0,
+      "method": "nt_only",
+      "precision": 0.0,
+      "recall": 0.0,
+      "total_positives": 0,
+      "universe_size": 100
+    },
+    {
+      "as_of_date": "2026-03-03",
+      "base_rate": 0.0,
+      "hits": 0,
+      "k": 20,
+      "lift": 0.0,
+      "method": "equal_weight",
+      "precision": 0.0,
+      "recall": 0.0,
+      "total_positives": 0,
+      "universe_size": 100
+    },
+    {
+      "as_of_date": "2026-03-03",
+      "base_rate": 0.0,
+      "hits": 0,
+      "k": 20,
+      "lift": 0.0,
+      "method": "random",
+      "precision": 0.0,
+      "recall": 0.0,
+      "total_positives": 0,
+      "universe_size": 100
+    },
+    {
+      "as_of_date": "2026-03-03",
+      "base_rate": 0.0,
+      "hits": 0,
+      "k": 50,
+      "lift": 0.0,
+      "method": "model",
+      "precision": 0.0,
+      "recall": 0.0,
+      "total_positives": 0,
+      "universe_size": 100
+    },
+    {
+      "as_of_date": "2026-03-03",
+      "base_rate": 0.0,
+      "hits": 0,
+      "k": 50,
+      "lift": 0.0,
+      "method": "nt_only",
+      "precision": 0.0,
+      "recall": 0.0,
+      "total_positives": 0,
+      "universe_size": 100
+    },
+    {
+      "as_of_date": "2026-03-03",
+      "base_rate": 0.0,
+      "hits": 0,
+      "k": 50,
+      "lift": 0.0,
+      "method": "equal_weight",
+      "precision": 0.0,
+      "recall": 0.0,
+      "total_positives": 0,
+      "universe_size": 100
+    },
+    {
+      "as_of_date": "2026-03-03",
+      "base_rate": 0.0,
+      "hits": 0,
+      "k": 50,
+      "lift": 0.0,
+      "method": "random",
+      "precision": 0.0,
+      "recall": 0.0,
+      "total_positives": 0,
+      "universe_size": 100
+    }
+  ],
+  "generated_at_utc": "2026-03-03T19:41:46.266271+00:00",
+  "horizon_days": 90,
+  "k_values": [
+    10,
+    20,
+    50
+  ],
+  "model_version": "v1_alert_composite",
+  "outcome_types": [
+    "RESTATEMENT_DISCLOSURE"
+  ],
+  "rows_evaluated": 12
+}

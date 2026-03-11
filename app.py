@@ -14,6 +14,8 @@ DEFAULT_API_BASE_URL = os.getenv("DASHBOARD_API_BASE_URL", "http://127.0.0.1:800
 DEFAULT_API_KEY = os.getenv("DASHBOARD_API_KEY") or os.getenv("DEMO_API_KEY") or os.getenv("API_KEY") or ""
 DEFAULT_LIMIT = int(os.getenv("DASHBOARD_DEFAULT_LIMIT", "25"))
 REQUEST_TIMEOUT_SECONDS = float(os.getenv("DASHBOARD_REQUEST_TIMEOUT_SECONDS", "20"))
+VISIBLE_LEADERBOARD_ROWS = 10
+LEADERBOARD_COLUMN_SPECS = [0.32, 0.62, 1.95, 1.25]
 
 
 st.set_page_config(
@@ -27,33 +29,42 @@ st.html(
     """
     <style>
       :root {
-        --bg: #020406;
-        --bg-soft: #07101a;
-        --panel: rgba(7, 15, 24, 0.94);
-        --panel-strong: rgba(4, 10, 16, 0.98);
-        --line: rgba(43, 78, 110, 0.45);
-        --line-soft: rgba(43, 78, 110, 0.20);
-        --text: #d5deea;
-        --muted: #73869d;
-        --accent: #17f0a8;
-        --accent-soft: rgba(23, 240, 168, 0.10);
-        --ice: #71d8ff;
-        --amber: #f2bf59;
-        --warn: #ff6f7c;
+        --bg: #030406;
+        --bg-soft: #06080d;
+        --panel: #0a0d12;
+        --panel-strong: #11161d;
+        --panel-soft: #161d27;
+        --line: rgba(91, 108, 255, 0.24);
+        --line-soft: rgba(110, 124, 142, 0.18);
+        --text: #eef2f7;
+        --muted: #8f9bab;
+        --accent: #5b6cff;
+        --accent-soft: rgba(91, 108, 255, 0.14);
+        --ice: #7ec8ff;
+        --amber: #a8b4ff;
+        --warn: #ff889d;
+      }
+
+      @keyframes fadeUp {
+        from {
+          opacity: 0;
+          transform: translateY(8px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
       }
 
       .stApp {
-        background:
-          radial-gradient(circle at top right, rgba(23, 240, 168, 0.08), transparent 22%),
-          radial-gradient(circle at top left, rgba(113, 216, 255, 0.06), transparent 20%),
-          linear-gradient(180deg, #010305 0%, #02060a 100%);
+        background: var(--bg);
         color: var(--text);
         font-family: "IBM Plex Mono", "SFMono-Regular", Menlo, monospace;
       }
 
       [data-testid="stSidebar"] {
-        background: linear-gradient(180deg, rgba(5, 9, 14, 0.98), rgba(4, 8, 13, 0.98));
-        border-right: 1px solid var(--line-soft);
+        background: var(--bg-soft);
+        border-right: 1px solid rgba(91, 108, 255, 0.18);
       }
 
       [data-testid="stHeader"] {
@@ -65,13 +76,19 @@ st.html(
         letter-spacing: 0.03em;
       }
 
+      .shell,
+      .panel,
+      div[data-testid="stVerticalBlockBorderWrapper"],
+      div[data-testid="stVerticalBlockBorderWrapper"] > div[data-testid="stVerticalBlock"] {
+        animation: fadeUp 180ms ease-out;
+      }
+
       .shell {
-        border: 1px solid var(--line-soft);
-        border-radius: 26px;
-        background: linear-gradient(180deg, rgba(3, 8, 13, 0.92), rgba(3, 7, 12, 0.98));
-        padding: 1.35rem 1.35rem 1.1rem 1.35rem;
-        box-shadow: 0 22px 60px rgba(0, 0, 0, 0.36);
-        overflow: hidden;
+        border: 1px solid rgba(91, 108, 255, 0.20);
+        border-radius: 8px;
+        background: var(--panel);
+        padding: 1rem 1rem 0.85rem 1rem;
+        box-shadow: 0 10px 24px rgba(0, 0, 0, 0.18);
       }
 
       .shell-topline {
@@ -84,155 +101,65 @@ st.html(
       }
 
       .eyebrow {
-        color: var(--ice);
-        font-size: 0.76rem;
-        letter-spacing: 0.16em;
+        color: var(--accent);
+        font-size: 0.72rem;
+        letter-spacing: 0.18em;
         text-transform: uppercase;
       }
 
       .title {
-        margin-top: 0.35rem;
-        font-size: 1.85rem;
+        margin-top: 0.3rem;
+        font-size: 1.55rem;
         color: var(--text);
-        font-family: "Georgia", "Times New Roman", serif;
-        letter-spacing: 0.01em;
+        font-family: "IBM Plex Mono", "SFMono-Regular", Menlo, monospace;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
       }
 
       .subtitle {
         color: var(--muted);
         margin-top: 0.35rem;
-        max-width: 34rem;
-        font-size: 0.96rem;
-        line-height: 1.65;
+        max-width: 42rem;
+        font-size: 0.88rem;
+        line-height: 1.5;
       }
 
       .timestamp {
-        color: var(--muted);
-        font-size: 0.76rem;
-        letter-spacing: 0.10em;
+        color: var(--accent);
+        font-size: 0.72rem;
+        letter-spacing: 0.14em;
         text-transform: uppercase;
         white-space: nowrap;
       }
 
-      .board {
-        width: 100%;
-        border-collapse: collapse;
-        margin-top: 1rem;
-      }
-
-      .board th {
+      .selection-note {
         color: var(--muted);
         font-size: 0.74rem;
-        font-weight: 700;
-        letter-spacing: 0.12em;
-        text-transform: uppercase;
-        padding: 0.95rem 0.85rem;
-        border-bottom: 1px solid var(--line);
-        text-align: left;
-      }
-
-      .board td {
-        padding: 1rem 0.85rem;
-        border-bottom: 1px solid var(--line-soft);
-        vertical-align: middle;
-        font-size: 0.95rem;
-      }
-
-      .board tr:hover td {
-        background: rgba(14, 29, 43, 0.34);
-      }
-
-      .board tr.selected-row td {
-        background: linear-gradient(90deg, rgba(23, 240, 168, 0.12), rgba(23, 240, 168, 0.03));
-        box-shadow: inset 3px 0 0 rgba(23, 240, 168, 0.6);
-      }
-
-      .rank-cell {
-        color: var(--muted);
-        width: 3rem;
-      }
-
-      .issuer-ticker {
-        color: var(--ice);
-        margin-right: 0.55rem;
-      }
-
-      .issuer-name {
-        color: var(--text);
-        font-weight: 700;
-        letter-spacing: 0.02em;
-      }
-
-      .score-cell {
-        color: var(--text);
-        font-weight: 700;
-      }
-
-      .percentile-cell {
-        color: var(--accent);
-        font-weight: 700;
-      }
-
-      .tier {
-        display: inline-flex;
-        align-items: center;
-        border-radius: 999px;
-        padding: 0.24rem 0.6rem;
-        font-size: 0.74rem;
-        letter-spacing: 0.08em;
-        text-transform: uppercase;
-        border: 1px solid transparent;
-      }
-
-      .tier-high {
-        color: var(--warn);
-        background: rgba(255, 111, 124, 0.10);
-        border-color: rgba(255, 111, 124, 0.22);
-      }
-
-      .tier-medium {
-        color: var(--amber);
-        background: rgba(242, 191, 89, 0.10);
-        border-color: rgba(242, 191, 89, 0.22);
-      }
-
-      .tier-low {
-        color: var(--accent);
-        background: rgba(23, 240, 168, 0.10);
-        border-color: rgba(23, 240, 168, 0.22);
+        line-height: 1.45;
+        margin-top: 0.75rem;
       }
 
       .panel {
-        border: 1px solid var(--line-soft);
-        border-radius: 18px;
-        background: linear-gradient(180deg, rgba(5, 11, 17, 0.96), rgba(4, 9, 14, 0.98));
-        padding: 1rem 1rem 0.95rem 1rem;
-        box-shadow: 0 14px 32px rgba(0, 0, 0, 0.24);
-        position: relative;
-        overflow: hidden;
+        border: 1px solid rgba(91, 108, 255, 0.18);
+        border-radius: 6px;
+        background: var(--panel);
+        padding: 0.85rem 0.85rem 0.8rem 0.85rem;
+        box-shadow: 0 8px 18px rgba(0, 0, 0, 0.14);
         transition: transform 160ms ease, border-color 160ms ease, box-shadow 160ms ease;
       }
 
-      .panel::before {
-        content: "";
-        position: absolute;
-        inset: 0 0 auto 0;
-        height: 1px;
-        background: linear-gradient(90deg, rgba(113, 216, 255, 0), rgba(23, 240, 168, 0.45), rgba(113, 216, 255, 0));
-      }
-
       .panel:hover {
-        transform: translateY(-2px);
-        border-color: rgba(23, 240, 168, 0.26);
-        box-shadow: 0 18px 38px rgba(0, 0, 0, 0.30);
+        transform: translateY(-1px);
+        border-color: rgba(91, 108, 255, 0.30);
+        box-shadow: 0 10px 22px rgba(0, 0, 0, 0.18);
       }
 
       .panel-title {
-        color: var(--ice);
-        font-size: 0.82rem;
-        letter-spacing: 0.12em;
+        color: var(--accent);
+        font-size: 0.74rem;
+        letter-spacing: 0.16em;
         text-transform: uppercase;
-        margin-bottom: 0.8rem;
+        margin-bottom: 0.7rem;
       }
 
       .stat-grid {
@@ -242,11 +169,11 @@ st.html(
       }
 
       .stat {
-        border: 1px solid var(--line-soft);
-        border-radius: 14px;
-        padding: 0.75rem 0.8rem;
-        background: rgba(10, 21, 33, 0.58);
-        min-height: 92px;
+        border: 1px solid rgba(110, 124, 142, 0.16);
+        border-radius: 6px;
+        padding: 0.62rem 0.72rem;
+        background: var(--panel-strong);
+        min-height: 78px;
         display: flex;
         flex-direction: column;
         justify-content: space-between;
@@ -254,15 +181,15 @@ st.html(
 
       .stat-label {
         color: var(--muted);
-        font-size: 0.72rem;
-        letter-spacing: 0.10em;
+        font-size: 0.68rem;
+        letter-spacing: 0.14em;
         text-transform: uppercase;
       }
 
       .stat-value {
         color: var(--text);
-        font-size: 1.05rem;
-        margin-top: 0.35rem;
+        font-size: 0.98rem;
+        margin-top: 0.3rem;
         font-weight: 700;
         line-height: 1.18;
         word-break: break-word;
@@ -270,9 +197,9 @@ st.html(
 
       .panel-copy {
         color: var(--muted);
-        font-size: 0.84rem;
-        line-height: 1.55;
-        margin-top: 0.85rem;
+        font-size: 0.8rem;
+        line-height: 1.45;
+        margin-top: 0.75rem;
       }
 
       .signal-list {
@@ -285,8 +212,8 @@ st.html(
         display: flex;
         justify-content: space-between;
         gap: 0.8rem;
-        padding: 0.55rem 0;
-        border-bottom: 1px solid var(--line-soft);
+        padding: 0.48rem 0;
+        border-bottom: 1px solid rgba(110, 124, 142, 0.16);
       }
 
       .signal-item:last-child {
@@ -314,12 +241,179 @@ st.html(
         margin-bottom: 0.45rem;
       }
 
-      .footnote {
-        color: var(--muted);
-        font-size: 0.76rem;
-        text-transform: uppercase;
+      .tier {
+        display: inline-flex;
+        align-items: center;
+        border-radius: 999px;
+        padding: 0.2rem 0.52rem;
+        font-size: 0.68rem;
         letter-spacing: 0.10em;
-        margin-top: 1rem;
+        text-transform: uppercase;
+        border: 1px solid transparent;
+      }
+
+      .tier-high {
+        color: var(--warn);
+        background: rgba(255, 125, 135, 0.10);
+        border-color: rgba(255, 125, 135, 0.22);
+      }
+
+      .tier-medium {
+        color: var(--amber);
+        background: rgba(168, 180, 255, 0.10);
+        border-color: rgba(168, 180, 255, 0.22);
+      }
+
+      .tier-low {
+        color: var(--accent);
+        background: rgba(91, 108, 255, 0.10);
+        border-color: rgba(91, 108, 255, 0.22);
+      }
+
+      div[data-testid="stVerticalBlockBorderWrapper"] {
+        border: 1px solid rgba(91, 108, 255, 0.16);
+        border-radius: 6px;
+        background: var(--panel);
+        box-shadow: 0 6px 14px rgba(0, 0, 0, 0.12);
+      }
+
+      .board-header {
+        display: grid;
+        grid-template-columns: 0.32fr 0.62fr 1.95fr 1.25fr;
+        gap: 0.18rem;
+        padding: 0.02rem 0 0.16rem 0;
+        border-bottom: 1px solid rgba(91, 108, 255, 0.16);
+        color: var(--accent);
+        font-size: 0.62rem;
+        font-weight: 700;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+      }
+
+      div[data-testid="stButton"] {
+        margin-bottom: 0.02rem !important;
+      }
+
+      .stButton > button {
+        background: var(--panel-strong);
+        color: var(--text);
+        border: 1px solid rgba(110, 124, 142, 0.14);
+        transition: transform 140ms ease, border-color 140ms ease, background-color 140ms ease, box-shadow 140ms ease;
+      }
+
+      .stButton > button:hover {
+        transform: translateY(-1px);
+        border-color: rgba(91, 108, 255, 0.28);
+        background: var(--panel-soft);
+      }
+
+      .stButton > button[kind="secondary"],
+      .stButton > button[kind="primary"] {
+        width: 100%;
+        max-width: 100%;
+        justify-content: flex-start;
+        min-height: 22px !important;
+        height: 22px !important;
+        border-radius: 2px;
+        padding: 0.01rem 0.02rem !important;
+        margin: 0 !important;
+        text-align: left;
+        box-sizing: border-box !important;
+        min-width: 0 !important;
+        overflow: hidden !important;
+      }
+
+      .stButton > button > div,
+      .stButton > button > div > div,
+      .stButton [data-testid="stMarkdownContainer"] {
+        width: 100% !important;
+        max-width: 100% !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        box-sizing: border-box !important;
+        min-width: 0 !important;
+        overflow: hidden !important;
+      }
+
+      .stButton > button > div {
+        display: flex !important;
+        justify-content: flex-start !important;
+        align-items: center;
+      }
+
+      .stButton [data-testid="stMarkdownContainer"] {
+        flex: 1 1 auto;
+      }
+
+      .stButton > button[kind="secondary"] p,
+      .stButton > button[kind="primary"] p {
+        white-space: pre;
+        text-align: left;
+        width: 100% !important;
+        max-width: 100% !important;
+        font-family: "IBM Plex Mono", "SFMono-Regular", Menlo, monospace;
+        font-size: 0.61rem !important;
+        line-height: 0.92 !important;
+        letter-spacing: 0.004em;
+        font-variant-numeric: tabular-nums;
+        margin: 0;
+        box-sizing: border-box !important;
+        overflow: hidden !important;
+        text-overflow: ellipsis;
+      }
+
+      .leaderboard-cell-center .stButton > button > div {
+        justify-content: center !important;
+      }
+
+      .leaderboard-cell-right .stButton > button > div {
+        justify-content: flex-end !important;
+      }
+
+      .stButton > button[kind="primary"] {
+        background: rgba(91, 108, 255, 0.10);
+        border-color: rgba(91, 108, 255, 0.42);
+        box-shadow: inset 2px 0 0 rgba(91, 108, 255, 0.98);
+      }
+
+      .stButton > button[kind="primary"]:hover {
+        background: rgba(91, 108, 255, 0.14);
+      }
+
+      .stButton > button[kind="tertiary"] {
+        background: var(--panel-strong);
+        color: var(--text);
+        border: 1px solid rgba(110, 124, 142, 0.18);
+        border-radius: 4px;
+      }
+
+      div[data-baseweb="input"] > div,
+      div[data-baseweb="select"] > div,
+      .stTextInput input {
+        background: var(--panel-strong);
+        border-color: rgba(110, 124, 142, 0.18);
+        color: var(--text);
+        border-radius: 4px;
+      }
+
+      div[data-baseweb="input"] > div:focus-within,
+      div[data-baseweb="select"] > div:focus-within {
+        border-color: rgba(91, 108, 255, 0.32);
+        box-shadow: none;
+      }
+
+      .stCaption,
+      .stMarkdown p,
+      .stMarkdown li,
+      .stMarkdown label {
+        color: var(--muted);
+      }
+
+      @media (max-width: 1100px) {
+        .shell-topline {
+          flex-direction: column;
+          align-items: flex-start;
+        }
       }
     </style>
     """,
@@ -459,6 +553,63 @@ def _history_dataframe(history_items: list[dict[str, Any]]) -> pd.DataFrame:
     return frame
 
 
+def _leaderboard_height(row_count: int) -> int:
+    visible_rows = min(max(row_count, 1), VISIBLE_LEADERBOARD_ROWS)
+    return 6 + (visible_rows * 24)
+
+
+def _leaderboard_header_html(as_of_date: str | None) -> str:
+    updated = html.escape(as_of_date or "N/A")
+    return f"""
+    <div class="shell">
+      <div class="shell-topline">
+        <div>
+          <div class="eyebrow">Sec Review Priority</div>
+          <div class="title">Issuer Leaderboard</div>
+          <div class="subtitle">
+            Daily ranked issuers based on filing-behavior abnormality. Click a row to focus an issuer,
+            keep the sidebar picker for quick jumps, and use the context panels to understand what is
+            driving the current review queue.
+          </div>
+        </div>
+        <div class="timestamp">Updated: {updated}</div>
+      </div>
+      <div class="selection-note">
+        The board shows up to 10 rows at once and scrolls internally for the rest of the watchlist.
+      </div>
+    </div>
+    """
+
+
+def _leaderboard_columns_html() -> str:
+    return """
+    <div class="board-header">
+      <div>#</div>
+      <div>Ticker</div>
+      <div>Issuer</div>
+      <div>Score / Pct / Tier</div>
+    </div>
+    """
+
+
+def _leaderboard_button_label(item: dict[str, Any]) -> str:
+    rank = f"#{str(item.get('risk_rank') or '')}"
+    ticker = _truncate_text(str(item.get("company_ticker") or "N/A"), 6)
+    issuer = _truncate_text(str(item.get("company_name") or "Unknown Issuer"), 26)
+    score = _format_score(item.get("risk_score"))
+    percentile = _format_percent(item.get("percentile"))
+    tier_label, _ = _score_tier(item.get("risk_score"))
+    return f"{score}  {percentile}  {tier_label}"
+
+
+def _leaderboard_row_cells(item: dict[str, Any]) -> list[str]:
+    rank = f"#{str(item.get('risk_rank') or '')}"
+    ticker = _truncate_text(str(item.get("company_ticker") or "N/A"), 6)
+    issuer = _truncate_text(str(item.get("company_name") or "Unknown Issuer"), 26)
+    data_points = _leaderboard_button_label(item)
+    return [rank, ticker, issuer, data_points]
+
+
 def _top_signals(evidence: dict[str, Any]) -> list[dict[str, Any]]:
     signals = evidence.get("top_signals_monthly") or evidence.get("top_signals_30d") or []
     return signals if isinstance(signals, list) else []
@@ -470,7 +621,7 @@ def _contributors_dataframe(evidence: dict[str, Any]) -> pd.DataFrame:
         return pd.DataFrame()
     rows = [
         {
-            "Signal": item.get("anomaly_type"),
+            "Signal": _humanize_label(item.get("anomaly_type")),
             "Severity": item.get("severity_score"),
             "Contribution": item.get("contribution_proxy"),
             "Event At": item.get("event_at") or item.get("created_at"),
@@ -492,65 +643,6 @@ def _history_insight(frame: pd.DataFrame) -> tuple[str, str]:
     if delta <= -0.08:
         return "Cooling", f"{delta:+.3f} in visible window"
     return "Steady", f"{delta:+.3f} in visible window"
-
-
-def _leaderboard_table_html(items: list[dict[str, Any]], selected_cik: int | None, as_of_date: str | None) -> str:
-    rows: list[str] = []
-    for item in items:
-        cik = int(item.get("cik"))
-        issuer_name = html.escape(item.get("company_name") or "Unknown Issuer")
-        ticker = html.escape(item.get("company_ticker") or "N/A")
-        rank = html.escape(str(item.get("risk_rank") or ""))
-        score = html.escape(_format_score(item.get("risk_score")))
-        percentile = html.escape(_format_percent(item.get("percentile")))
-        tier_label, tier_class = _score_tier(item.get("risk_score"))
-        row_class = "selected-row" if selected_cik is not None and cik == selected_cik else ""
-        rows.append(
-            f"""
-            <tr class="{row_class}">
-              <td class="rank-cell">{rank}</td>
-              <td>
-                <span class="issuer-ticker">{ticker}</span>
-                <span class="issuer-name">{issuer_name}</span>
-              </td>
-              <td class="score-cell">{score}</td>
-              <td class="percentile-cell">{percentile}</td>
-              <td><span class="tier {tier_class}">{html.escape(tier_label)}</span></td>
-            </tr>
-            """
-        )
-
-    updated = html.escape(as_of_date or "N/A")
-    return f"""
-    <div class="shell">
-      <div class="shell-topline">
-        <div>
-          <div class="eyebrow">Sec Review Priority</div>
-          <div class="title">Issuer Leaderboard</div>
-          <div class="subtitle">
-            Daily ranked issuers based on filing-behavior abnormality. Use the right-side context to inspect
-            stability, confidence, and the signals driving the current priority tier.
-          </div>
-        </div>
-        <div class="timestamp">Updated: {updated}</div>
-      </div>
-      <table class="board">
-        <thead>
-          <tr>
-            <th>#</th>
-            <th>Issuer</th>
-            <th>Score</th>
-            <th>Percentile</th>
-            <th>Tier</th>
-          </tr>
-        </thead>
-        <tbody>
-          {''.join(rows)}
-        </tbody>
-      </table>
-      <div class="footnote">Leaderboard uses lean API reads for watchlist speed.</div>
-    </div>
-    """
 
 
 def _system_context_html(health: dict[str, Any], top_payload: dict[str, Any]) -> str:
@@ -590,7 +682,10 @@ def _selected_snapshot_html(score: dict[str, Any], evidence: dict[str, Any], his
     trend_label, trend_detail = _history_insight(history_frame)
     reason_summary = html.escape(
         _truncate_text(
-            str(evidence.get("reason_summary") or "Priority is driven by the latest anomaly mix and issuer-relative baseline."),
+            str(
+                evidence.get("reason_summary")
+                or "Priority is driven by the latest anomaly mix and issuer-relative baseline."
+            ),
             140,
         )
     )
@@ -683,7 +778,7 @@ def _guardrails_html() -> str:
       <div class="panel-title">Operator Notes</div>
       <ul class="guardrail-list">
         <li>This is a review-priority leaderboard, not a fraud or liability score.</li>
-        <li>Lean table rows intentionally omit heavy evidence payloads for speed.</li>
+        <li>Counts describe active modeled alerts, not the issuer's total filing count.</li>
         <li>Use issuer history and explainability before making escalation decisions.</li>
       </ul>
     </div>
@@ -693,36 +788,34 @@ def _guardrails_html() -> str:
 def _history_chart(frame: pd.DataFrame):
     if frame.empty:
         return None
-    return (
+    area = (
         alt.Chart(frame)
-        .mark_area(
-            line={"color": "#17f0a8", "size": 2.0},
-            color=alt.Gradient(
-                gradient="linear",
-                stops=[
-                    alt.GradientStop(color="rgba(23, 240, 168, 0.35)", offset=0),
-                    alt.GradientStop(color="rgba(23, 240, 168, 0.02)", offset=1),
-                ],
-                x1=1,
-                x2=1,
-                y1=1,
-                y2=0,
-            ),
-        )
+        .mark_area(color="rgba(91, 108, 255, 0.12)")
         .encode(
-            x=alt.X("as_of_date:T", title="As Of Date", axis=alt.Axis(labelColor="#73869d", titleColor="#73869d")),
+            x=alt.X("as_of_date:T", title="As Of Date"),
+            y=alt.Y("risk_score:Q", title="Risk Score", scale=alt.Scale(domain=[0, 1])),
+        )
+    )
+    line = (
+        alt.Chart(frame)
+        .mark_line(color="#5b6cff", size=2.0)
+        .encode(
+            x=alt.X("as_of_date:T", title="As Of Date", axis=alt.Axis(labelColor="#8f9bab", titleColor="#8f9bab")),
             y=alt.Y(
                 "risk_score:Q",
                 title="Risk Score",
                 scale=alt.Scale(domain=[0, 1]),
-                axis=alt.Axis(labelColor="#73869d", titleColor="#73869d"),
+                axis=alt.Axis(labelColor="#8f9bab", titleColor="#8f9bab"),
             ),
             tooltip=["as_of_date:T", "risk_score:Q", "risk_rank:Q"],
         )
+    )
+    return (
+        (area + line)
         .properties(height=260)
         .configure_view(stroke=None)
         .configure(background="transparent")
-        .configure_axis(gridColor="rgba(43, 78, 110, 0.18)")
+        .configure_axis(gridColor="rgba(110, 124, 142, 0.16)")
     )
 
 
@@ -736,10 +829,10 @@ with st.sidebar:
     if use_min_score:
         min_score = st.slider("Minimum score", min_value=0.0, max_value=1.0, value=0.25, step=0.05)
     history_limit = st.slider("History points", min_value=10, max_value=180, value=60, step=10)
-    if st.button("Refresh Data", use_container_width=True):
+    if st.button("Refresh Data", use_container_width=True, type="tertiary"):
         st.cache_data.clear()
         st.rerun()
-    st.caption("Dashboard uses lean leaderboard/history reads and full explain only for the focused issuer.")
+    st.caption("Click rows in the leaderboard to focus issuers. The picker below stays available for fast jumps.")
 
 
 try:
@@ -754,22 +847,65 @@ if not top_items:
     st.warning("No leaderboard rows were returned by /risk/top. Check the daily pipeline and API filters.")
     st.stop()
 
-labels = [_company_label(item) for item in top_items]
-default_cik = st.session_state.get("selected_cik")
-default_index = 0
-if default_cik is not None:
-    for index, item in enumerate(top_items):
-        if int(item.get("cik")) == int(default_cik):
-            default_index = index
-            break
+item_by_cik = {int(item.get("cik")): item for item in top_items}
+available_ciks = [int(item.get("cik")) for item in top_items]
+label_by_cik = {int(item.get("cik")): _company_label(item) for item in top_items}
 
-main_col, side_col = st.columns([2.4, 1.0], gap="large")
+current_selected_cik = st.session_state.get("selected_cik")
+picker_state = st.session_state.get("issuer_picker")
+if picker_state is not None and int(picker_state) in item_by_cik:
+    st.session_state["selected_cik"] = int(picker_state)
+elif current_selected_cik is None or int(current_selected_cik) not in item_by_cik:
+    st.session_state["selected_cik"] = available_ciks[0]
+    st.session_state["issuer_picker"] = available_ciks[0]
 
-with side_col:
-    selected_label = st.selectbox("Focus Issuer", options=labels, index=default_index)
-    selected_item = top_items[labels.index(selected_label)]
-    selected_cik = int(selected_item["cik"])
-    st.session_state["selected_cik"] = selected_cik
+header_col, _ = st.columns([2.45, 1.0], gap="large")
+
+with header_col:
+    st.html(_leaderboard_header_html(top_payload.get("as_of_date")))
+
+with st.sidebar:
+    picker_index = available_ciks.index(int(st.session_state["selected_cik"]))
+    picker_cik = st.selectbox(
+        "Issuer Picker",
+        options=available_ciks,
+        index=picker_index,
+        format_func=lambda cik: label_by_cik.get(int(cik), str(cik)),
+        key="issuer_picker",
+    )
+    if int(picker_cik) != int(st.session_state["selected_cik"]):
+        st.session_state["selected_cik"] = int(picker_cik)
+
+
+@st.fragment
+def render_dashboard_fragment() -> None:
+    main_col, side_col = st.columns([2.45, 1.0], gap="large")
+
+    with main_col:
+        with st.container(border=True):
+            st.html(_leaderboard_columns_html())
+            with st.container(height=_leaderboard_height(len(top_items)), border=False):
+                for item in top_items:
+                    cik = int(item.get("cik"))
+                    is_selected = cik == int(st.session_state["selected_cik"])
+                    row_cells = _leaderboard_row_cells(item)
+                    row_cols = st.columns(LEADERBOARD_COLUMN_SPECS, gap=None, vertical_alignment="center")
+                    for idx, (col, value) in enumerate(zip(row_cols, row_cells)):
+                        with col:
+                            if st.button(
+                                value,
+                                key=f"leaderboard_tile_{cik}_{idx}",
+                                type="primary" if is_selected else "secondary",
+                                use_container_width=True,
+                            ):
+                                st.session_state["selected_cik"] = cik
+                                st.session_state["issuer_picker"] = cik
+                                st.rerun(scope="fragment")
+            st.caption(
+                "Lean leaderboard reads omit heavy evidence payloads. Scroll inside the board for rows beyond the first 10."
+            )
+
+    selected_cik = int(st.session_state["selected_cik"])
 
     try:
         history_payload = load_history(api_base_url, api_key, selected_cik, history_limit)
@@ -783,41 +919,37 @@ with side_col:
     history_items = history_payload.get("items") or []
     history_frame = _history_dataframe(history_items)
 
-    st.html(_system_context_html(health, top_payload))
-    st.html(_selected_snapshot_html(score, evidence, history_frame))
-    st.html(_signals_html(evidence))
-    st.html(_guardrails_html())
+    with side_col:
+        st.html(_system_context_html(health, top_payload))
+        st.html(_selected_snapshot_html(score, evidence, history_frame))
+        st.html(_signals_html(evidence))
+        st.html(_guardrails_html())
 
-with main_col:
-    st.html(
-        _leaderboard_table_html(
-            top_items,
-            selected_cik=selected_cik,
-            as_of_date=top_payload.get("as_of_date"),
-        )
-    )
+    with main_col:
+        with st.container(border=True):
+            st.markdown("### Selected Issuer History")
+            if history_frame.empty:
+                st.info("No history points were returned for this issuer.")
+            else:
+                chart = _history_chart(history_frame)
+                if chart is not None:
+                    st.altair_chart(chart, use_container_width=True)
+            st.caption(
+                score.get("reason_summary")
+                or evidence.get("reason_summary")
+                or "Use explainability and history together before escalating an issuer."
+            )
 
-    with st.container(border=True):
-        st.markdown("### Selected Issuer History")
-        if history_frame.empty:
-            st.info("No history points were returned for this issuer.")
-        else:
-            chart = _history_chart(history_frame)
-            if chart is not None:
-                st.altair_chart(chart, use_container_width=True)
-        st.caption(
-            score.get("reason_summary")
-            or evidence.get("reason_summary")
-            or "Use explainability and history together before escalating an issuer."
-        )
+        contributors_frame = _contributors_dataframe(evidence)
+        with st.container(border=True):
+            st.markdown("### Contributing Alerts")
+            if contributors_frame.empty:
+                st.info("No contributing alert detail is available.")
+            else:
+                st.dataframe(contributors_frame, use_container_width=True, hide_index=True)
 
-    contributors_frame = _contributors_dataframe(evidence)
-    with st.container(border=True):
-        st.markdown("### Contributing Alerts")
-        if contributors_frame.empty:
-            st.info("No contributing alert detail is available.")
-        else:
-            st.dataframe(contributors_frame, use_container_width=True, hide_index=True)
+    with st.expander("Raw Explain Payload"):
+        st.code(json.dumps(explain_payload, indent=2, sort_keys=True), language="json")
 
-with st.expander("Raw Explain Payload"):
-    st.code(json.dumps(explain_payload, indent=2, sort_keys=True), language="json")
+
+render_dashboard_fragment()

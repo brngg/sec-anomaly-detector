@@ -1,6 +1,6 @@
 # SEC Review Priority Monitor — Unified Codebase Summary
 
-**Last updated:** 2026-03-09
+**Last updated:** 2026-03-11
 
 ## 1) What This Project Is
 - A public-data SEC filing triage system.
@@ -26,7 +26,7 @@
 6. Weekly maintenance (`scripts/prune_postgres_data.py`) trims legacy score rows / old feature snapshots and emits a retention report artifact.
 7. Streamlit dashboard (`app.py`) provides a leaderboard-first UI over the current API.
 
-## 5) Two Operating Lanes (Important)
+## 5) Three Operating Lanes (Important)
 
 Backend profile (set once per shell before running lane commands):
 
@@ -35,6 +35,10 @@ Backend profile (set once per shell before running lane commands):
 export DB_BACKEND=postgres
 export DATABASE_URL="postgresql://app_rw.<project_ref>:<password>@<pooler-host>:5432/postgres?sslmode=require"
 export API_DATABASE_URL="postgresql://app_ro.<project_ref>:<password>@<pooler-host>:5432/postgres?sslmode=require"
+
+# Accepted aliases in code/workflows:
+# export DATABASE_URL_RW="$DATABASE_URL"
+# export DATABASE_URL_RO="$API_DATABASE_URL"
 
 # Local file profile
 # export DB_BACKEND=sqlite
@@ -193,7 +197,9 @@ Essential leaderboard fields:
 Database backend:
 - `DB_BACKEND` (`postgres` or `sqlite`)
 - `DATABASE_URL` (required for `postgres` job/runtime writes)
+- `DATABASE_URL_RW` (accepted alias for write DSN; used by GitHub Actions)
 - `API_DATABASE_URL` (optional read-only DSN for API runtime in `postgres` mode)
+- `DATABASE_URL_RO` (accepted alias for API read-only DSN)
 
 Hosted profile (Supabase):
 - Use `DB_BACKEND=postgres` with pooler DSNs.
@@ -218,10 +224,27 @@ Analysis:
 - `POLL_ENABLE_RISK_SCORING` (controls scoring inside `run_analysis.py`)
 - `RISK_SCORING_MODE` (`monthly_abnormal` default, `alert_composite` legacy)
 - `RISK_DEFAULT_MODEL_VERSION` (API default model selector; default `v2_monthly_abnormal`)
+- `RISK_MODEL_VERSION` (optional explicit model-version label override when you do not want the mode-derived default)
 - `RISK_MONTHLY_HISTORY_MONTHS` (optional baseline history window in months)
 
 Validation fetchers:
 - `SEC_IDENTITY` for candidate generation and verification
+
+Additional poller controls:
+- `POLL_CATCHUP_DAYS`
+- `POLL_CATCHUP_COOLDOWN_HOURS`
+- `POLL_LOOKBACK_DAYS`
+- `POLL_CURRENT_PAGE_SIZE`
+- `POLL_FEED_BUFFER_HOURS`
+- `POLL_STALE_RUN_HOURS`
+- `POLL_STALE_RUN_THRESHOLD_PCT`
+- `POLL_SLEEP_SECONDS`
+
+Dashboard runtime:
+- `DASHBOARD_API_BASE_URL`
+- `DASHBOARD_API_KEY`
+- `DASHBOARD_DEFAULT_LIMIT`
+- `DASHBOARD_REQUEST_TIMEOUT_SECONDS`
 
 ## 10) Foundation Changes To Apply On Existing Deployments
 1. Run schema bootstrap against Postgres so the latest indexes exist:

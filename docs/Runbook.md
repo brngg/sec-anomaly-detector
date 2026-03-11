@@ -8,7 +8,7 @@ Demonstrate a defensible SEC review-priority system with:
 
 ## Pre-Demo Checklist
 1. Confirm latest code on `main` is deployed in GitHub Actions.
-2. Verify `DATABASE_URL_RW`, `SEC_IDENTITY`, `API_AUTH_ENABLED`, and `API_KEY` secrets are present.
+2. Verify `DATABASE_URL_RW` and `SEC_IDENTITY` GitHub Actions secrets are present, and the deployed API runtime has `API_AUTH_ENABLED` / `API_KEY` configured when auth is enabled.
 3. Ensure latest workflow run on `main` is green:
    - ingestion
    - analysis
@@ -20,8 +20,8 @@ Demonstrate a defensible SEC review-priority system with:
 ### 1) Full v2 backfill (24 months)
 ```bash
 caffeinate -dimsu ./venv/bin/python src/analysis/backfill_risk_scores.py \
-  --start-date 2024-03-03 \
-  --end-date 2026-03-04 \
+  --backfill-days 730 \
+  --end-date "$(date -u +%F)" \
   --scoring-mode monthly_abnormal \
   --model-version v2_monthly_abnormal \
   --progress-every 25
